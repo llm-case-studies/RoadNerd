@@ -1,0 +1,7 @@
+{
+    "llm_backend": "ollama",
+    "model": "llama3.2:3b",
+    "port": 8080,
+    "safe_mode": true,
+    "venv_path": "/home/alex/.roadnerd_venv"
+}

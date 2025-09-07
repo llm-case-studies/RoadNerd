@@ -1,0 +1,21 @@
+#!/bin/bash
+# Enable USB tethering for RoadNerd
+
+echo "RoadNerd USB Tethering Setup"
+echo "============================"
+echo ""
+echo "Option 1: GUI Method (Easiest)"
+echo "1. Open Settings -> Network"
+echo "2. Find 'USB Ethernet' or similar"
+echo "3. Enable 'Share connection'"
+echo ""
+echo "Option 2: Command Line"
+echo "Run: nmcli device connect usb0"
+echo ""
+echo "Option 3: Manual Setup"
+echo "Run these commands:"
+echo "  sudo ip link set usb0 up"
+echo "  sudo ip addr add 192.168.42.1/24 dev usb0"
+echo ""
+echo "After enabling, the client laptop should connect to:"
+echo "  http://192.168.42.1:8080"
