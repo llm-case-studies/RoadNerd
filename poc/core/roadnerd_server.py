@@ -5,6 +5,7 @@ Run this on your BeeLink or second laptop with LLM installed
 """
 
 import json
+import sys
 import subprocess
 import platform
 import os
@@ -30,10 +31,19 @@ CORS(app)  # Allow cross-origin requests
 CONFIG = {
     'llm_backend': 'ollama',  # or 'llamafile' or 'gpt4all'
     'model': 'llama3.2',
-    'usb_network_ip': '192.168.42.1',  # Server IP on USB network
     'port': 8080,
     'safe_mode': True  # Don't execute commands automatically
 }
+
+# Environment overrides for easy experimentation
+CONFIG['llm_backend'] = os.getenv('RN_LLM_BACKEND', CONFIG['llm_backend'])
+CONFIG['model'] = os.getenv('RN_MODEL', CONFIG['model'])
+try:
+    CONFIG['port'] = int(os.getenv('RN_PORT', str(CONFIG['port'])))
+except Exception:
+    pass
+sm = os.getenv('RN_SAFE_MODE', str(CONFIG['safe_mode']))
+CONFIG['safe_mode'] = sm.lower() in ('1', 'true', 'yes', 'on')
 
 # Knowledge base - embedded for portability
 KNOWLEDGE_BASE = {
@@ -142,6 +152,22 @@ class SystemDiagnostics:
         
         return checks
 
+    @staticmethod
+    def ipv4_addresses() -> List[str]:
+        """List IPv4 addresses for all non-loopback interfaces"""
+        addrs: List[str] = []
+        try:
+            result = subprocess.run(['ip', '-4', '-o', 'addr', 'show'], capture_output=True, text=True)
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 4:
+                    ip = parts[3].split('/')[0]
+                    if ip != '127.0.0.1':
+                        addrs.append(ip)
+        except Exception:
+            pass
+        return addrs
+
 class LLMInterface:
     """Interface to various LLM backends"""
     
@@ -150,10 +176,14 @@ class LLMInterface:
         """Query Ollama API"""
         try:
             import requests
-            response = requests.post(
-                'http://localhost:11434/api/generate',
-                json={'model': CONFIG['model'], 'prompt': prompt, 'stream': False}
-            )
+            base = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+            # Deterministic-ish defaults for fast testing
+            options = {
+                'temperature': float(os.getenv('RN_TEMP', '0')),
+                'num_predict': int(os.getenv('RN_NUM_PREDICT', '128'))
+            }
+            payload = {'model': CONFIG['model'], 'prompt': prompt, 'stream': False, 'options': options}
+            response = requests.post(f'{base}/api/generate', json=payload)
             return response.json().get('response', 'No response from Ollama')
         except Exception as e:
             return f"Ollama not available: {e}"
@@ -163,10 +193,8 @@ class LLMInterface:
         """Query llamafile server"""
         try:
             import requests
-            response = requests.post(
-                'http://localhost:8080/completion',
-                json={'prompt': prompt, 'n_predict': 200}
-            )
+            base = os.getenv('LLAMAFILE_BASE_URL', 'http://localhost:8081')
+            response = requests.post(f'{base}/completion', json={'prompt': prompt, 'n_predict': 200})
             return response.json().get('content', 'No response from llamafile')
         except Exception as e:
             return f"Llamafile not available: {e}"
@@ -265,6 +293,7 @@ def home():
             .endpoint { margin: 10px 0; padding: 10px; background: #111; }
             .online { color: #0f0; }
             .offline { color: #f00; }
+            a { color: #7cf; }
         </style>
     </head>
     <body>
@@ -280,23 +309,28 @@ def home():
                 <div class="endpoint">POST /api/execute - Execute command</div>
                 <div class="endpoint">GET /api/status - System status</div>
                 <div class="endpoint">POST /api/llm - Query LLM directly</div>
+                <div class="endpoint">GET <a href="/api-docs">/api-docs</a> - API Console (browser tests)</div>
             </div>
             <div class="status">
-                <h2>USB Network Setup</h2>
-                <pre>
-1. Connect devices via USB cable
-2. Enable USB tethering on this device
-3. Client device should see network at 192.168.42.x
-4. Access this server at: http://192.168.42.1:8080
-                </pre>
+                <h2>Connection Info</h2>
+                <div id="conn">Detecting local addresses...</div>
+                <p>Recommended: direct Ethernet between Patient Box and this server. Common address: <code>10.55.0.1:8080</code>.</p>
             </div>
         </div>
         <script>
             fetch('/api/status')
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('status').innerHTML = JSON.stringify(data, null, 2);
-                });
+              .then(r => r.json())
+              .then(data => {
+                document.getElementById('status').innerHTML = JSON.stringify(data, null, 2);
+                const ips = (data.system && data.system.ips) ? data.system.ips : [];
+                let html = '';
+                if (ips.length) {
+                  html += '<pre>Local IPv4 addresses:\n' + ips.map(ip => '  - ' + ip + ':8080').join('\n') + '</pre>';
+                } else {
+                  html += '<pre>No non-loopback IPv4 addresses detected.</pre>';
+                }
+                document.getElementById('conn').innerHTML = html;
+              });
         </script>
     </body>
     </html>
@@ -309,11 +343,82 @@ def api_status():
     return jsonify({
         'server': 'online',
         'timestamp': datetime.now().isoformat(),
-        'system': SystemDiagnostics.get_system_info(),
+        'system': {**SystemDiagnostics.get_system_info(), 'ips': SystemDiagnostics.ipv4_addresses()},
         'connectivity': SystemDiagnostics.check_connectivity(),
         'llm_backend': CONFIG['llm_backend'],
         'safe_mode': CONFIG['safe_mode']
     })
+
+@app.route('/api-docs', methods=['GET'])
+def api_docs():
+    """Lightweight API console for browser testing"""
+    html = '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>RoadNerd API Console</title>
+      <style>
+        body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background: #0b1220; color: #e0e6f0; }
+        h1, h2 { margin: 0 0 10px; }
+        section { background: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        textarea, input { width: 100%; background: #0b1220; color: #e0e6f0; border: 1px solid #374151; border-radius: 6px; padding: 8px; }
+        button { background: #2563eb; color: white; border: 0; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+        pre { background: #0b1220; padding: 12px; border-radius: 6px; overflow: auto; max-height: 320px; }
+        label { display: block; margin: 6px 0; }
+      </style>
+    </head>
+    <body>
+      <h1>RoadNerd API Console</h1>
+      <section>
+        <h2>GET /api/status</h2>
+        <button onclick="callStatus()">Call</button>
+        <pre id="statusOut"></pre>
+      </section>
+      <section>
+        <h2>POST /api/diagnose</h2>
+        <label>Issue</label>
+        <textarea id="issue" rows="4">My WiFi is not working</textarea>
+        <button onclick="callDiagnose()">Diagnose</button>
+        <pre id="diagOut"></pre>
+      </section>
+      <section>
+        <h2>POST /api/execute</h2>
+        <label>Command</label>
+        <input id="cmd" value="whoami"/>
+        <label><input id="force" type="checkbox"/> Force (override safe mode)</label>
+        <button onclick="callExecute()">Execute</button>
+        <pre id="execOut"></pre>
+      </section>
+      <section>
+        <h2>POST /api/llm</h2>
+        <label>Prompt</label>
+        <textarea id="prompt" rows="3">What version of Ubuntu am I running?</textarea>
+        <button onclick="callLLM()">Ask</button>
+        <pre id="llmOut"></pre>
+      </section>
+      <script>
+        function j(o){ return JSON.stringify(o, null, 2); }
+        async function callStatus(){
+          const r = await fetch('/api/status');
+          document.getElementById('statusOut').textContent = j(await r.json());
+        }
+        async function callDiagnose(){
+          const r = await fetch('/api/diagnose', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({issue: document.getElementById('issue').value})});
+          document.getElementById('diagOut').textContent = j(await r.json());
+        }
+        async function callExecute(){
+          const r = await fetch('/api/execute', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({command: document.getElementById('cmd').value, force: document.getElementById('force').checked})});
+          document.getElementById('execOut').textContent = j(await r.json());
+        }
+        async function callLLM(){
+          const r = await fetch('/api/llm', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({prompt: document.getElementById('prompt').value})});
+          document.getElementById('llmOut').textContent = j(await r.json());
+        }
+      </script>
+    </body>
+    </html>
+    '''
+    return render_template_string(html)
 
 @app.route('/api/diagnose', methods=['POST'])
 def api_diagnose():
@@ -419,26 +524,15 @@ def api_scan_network():
     
     return jsonify(diagnostics)
 
-def setup_usb_network():
-    """Setup USB networking if not already configured"""
+def print_connection_guidance():
+    """Show connection guidance for direct Ethernet setups"""
     print("\n" + "="*50)
-    print("USB NETWORKING SETUP")
+    print("CONNECTION GUIDANCE")
     print("="*50)
-    print("\nOption 1: USB Tethering (Easiest)")
-    print("1. Connect this device to patient laptop via USB")
-    print("2. Enable 'USB Tethering' in network settings")
-    print("3. Patient laptop will get IP automatically")
-    print(f"4. Access server at: http://192.168.42.1:{CONFIG['port']}")
-    
-    print("\nOption 2: Direct USB Networking (Advanced)")
-    print("1. modprobe g_ether  # On this device")
-    print("2. ifconfig usb0 192.168.42.1")
-    print("3. Patient laptop should see new network interface")
-    
-    print("\nOption 3: Ethernet Cable")
-    print("1. Connect ethernet cable between devices")
-    print("2. Set static IPs on both sides")
-    print(f"3. This device: 192.168.1.1, Patient: 192.168.1.2")
+    print("- Recommended: direct Ethernet between this server and the Patient Box.")
+    print("- Typical server address: 10.55.0.1 (port 8080).")
+    print("- Client: run the RoadNerd client and it will auto-discover the server.")
+    print("- Browser API Console: /api-docs on any of the local IPs shown below.")
     print("\n" + "="*50)
 
 def start_llm_backend():
@@ -474,7 +568,7 @@ if __name__ == '__main__':
     
     # Setup steps
     start_llm_backend()
-    setup_usb_network()
+    print_connection_guidance()
     
     # Get local IP for display
     hostname = socket.gethostname()
@@ -486,7 +580,12 @@ if __name__ == '__main__':
     print(f"\n✓ Server starting on:")
     print(f"  • http://localhost:{CONFIG['port']}")
     print(f"  • http://{local_ip}:{CONFIG['port']}")
-    print(f"  • http://192.168.42.1:{CONFIG['port']} (USB network)")
+    # Print all detected IPv4s
+    ips = SystemDiagnostics.ipv4_addresses()
+    if ips:
+        print("  • Local IPv4s:")
+        for ip in ips:
+            print(f"    - http://{ip}:{CONFIG['port']}")
     print(f"\n✓ Safe mode: {CONFIG['safe_mode']}")
     print(f"✓ LLM backend: {CONFIG['llm_backend']}")
     print("\nPress Ctrl+C to stop\n")

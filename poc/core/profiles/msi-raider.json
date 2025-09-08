@@ -1,0 +1,159 @@
+{
+  "profile_name": "msi-raider",
+  "machine_type": "patient",
+  "generated": "2025-09-08",
+  "hardware": {
+    "cpu": {
+      "model": "Intel(R) Core(TM) i9-14900HX",
+      "cores": 24,
+      "threads": 32,
+      "max_freq_mhz": 5800,
+      "architecture": "x86_64"
+    },
+    "memory": {
+      "total_gb": 32,
+      "available_gb": 24
+    },
+    "storage": {
+      "type": "nvme",
+      "total_gb": 240,
+      "available_gb": 184
+    },
+    "graphics": [
+      {
+        "type": "integrated",
+        "model": "Intel Raptor Lake-S UHD Graphics"
+      },
+      {
+        "type": "discrete",
+        "model": "NVIDIA GeForce RTX 4070 Max-Q",
+        "compute_capable": true
+      }
+    ]
+  },
+  "software": {
+    "os": {
+      "distribution": "Ubuntu",
+      "version": "24.04.3 LTS",
+      "codename": "noble",
+      "kernel": "6.14.0-29-generic"
+    },
+    "python": {
+      "version": "3.12.3",
+      "pip_version": "24.0"
+    },
+    "ai_stack": {
+      "ollama": {
+        "installed": true,
+        "path": "/usr/local/bin/ollama"
+      },
+      "cuda_available": true
+    }
+  },
+  "network": {
+    "interfaces": [
+      {
+        "name": "enp58s0",
+        "type": "ethernet",
+        "ip": "10.55.0.2",
+        "subnet": "10.55.0.0/24",
+        "status": "active",
+        "notes": "Direct connection - ideal for RoadNerd"
+      },
+      {
+        "name": "wlp59s0f0",
+        "type": "wifi",
+        "ip": "172.20.4.96",
+        "subnet": "172.20.0.0/16",
+        "status": "active"
+      },
+      {
+        "name": "docker0",
+        "type": "virtual",
+        "ip": "172.17.0.1",
+        "subnet": "172.17.0.0/16",
+        "status": "active"
+      }
+    ]
+  },
+  "common_issues": [
+    {
+      "category": "high_performance_cpu",
+      "symptoms": ["thermal throttling", "cpu frequency scaling", "turbo boost issues"],
+      "solutions": [
+        {
+          "name": "Check CPU thermal state",
+          "command": "sensors | grep -i core",
+          "safe": true,
+          "description": "Monitor CPU temperatures"
+        },
+        {
+          "name": "Check CPU frequency scaling",
+          "command": "cpupower frequency-info",
+          "safe": true,
+          "description": "Check current CPU governor and frequencies"
+        }
+      ]
+    },
+    {
+      "category": "nvidia_gpu",
+      "symptoms": ["gpu not detected", "cuda not working", "driver issues"],
+      "solutions": [
+        {
+          "name": "Check NVIDIA driver status",
+          "command": "nvidia-smi",
+          "safe": true,
+          "description": "Verify GPU driver and status"
+        },
+        {
+          "name": "Check CUDA availability",
+          "command": "nvcc --version || echo 'CUDA not installed'",
+          "safe": true,
+          "description": "Check CUDA installation"
+        }
+      ]
+    },
+    {
+      "category": "direct_ethernet",
+      "symptoms": ["10.55.0.x not reachable", "ethernet connection issues"],
+      "solutions": [
+        {
+          "name": "Check ethernet interface status",
+          "command": "ip addr show enp58s0",
+          "safe": true,
+          "description": "Verify ethernet interface configuration"
+        },
+        {
+          "name": "Test direct connection",
+          "command": "ping -c 3 10.55.0.1",
+          "safe": true,
+          "description": "Test connectivity to typical server address"
+        }
+      ]
+    }
+  ],
+  "performance_profile": {
+    "llm_recommendations": [
+      {
+        "model": "llama3.2:1b",
+        "ram_usage": "~1GB",
+        "use_case": "fast iteration, development"
+      },
+      {
+        "model": "llama3.2:3b", 
+        "ram_usage": "~2GB",
+        "use_case": "balanced performance"
+      },
+      {
+        "model": "llama3.2:7b",
+        "ram_usage": "~4GB", 
+        "use_case": "high quality responses"
+      }
+    ],
+    "concurrent_capacity": {
+      "multiple_models": true,
+      "server_and_client": true,
+      "gpu_acceleration": true
+    }
+  }
+}
