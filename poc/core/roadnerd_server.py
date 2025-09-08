@@ -13,15 +13,16 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import socket
 import shutil
+from pathlib import Path
 
 # Try imports, fallback gracefully
 try:
-    from flask import Flask, request, jsonify, render_template_string
+    from flask import Flask, request, jsonify, render_template_string, send_file, make_response
     from flask_cors import CORS
 except ImportError:
     print("Installing required packages...")
     subprocess.run([sys.executable, "-m", "pip", "install", "flask", "flask-cors"])
-    from flask import Flask, request, jsonify, render_template_string
+    from flask import Flask, request, jsonify, render_template_string, send_file, make_response
     from flask_cors import CORS
 
 app = Flask(__name__)
@@ -419,6 +420,84 @@ def api_docs():
     </html>
     '''
     return render_template_string(html)
+
+@app.route('/download/client.py', methods=['GET'])
+def download_client():
+    """Serve client file for patient bootstrap"""
+    try:
+        client_path = Path(__file__).parent / 'roadnerd_client.py'
+        return send_file(str(client_path), as_attachment=True, download_name='roadnerd_client.py')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 404
+
+@app.route('/download/ollama-models.tar.gz', methods=['GET'])  
+def download_models():
+    """Serve cached models for patient bootstrap"""
+    try:
+        from pathlib import Path
+        models_path = Path.home() / '.roadnerd' / 'models' / 'ollama-models.tar.gz'
+        if models_path.exists():
+            return send_file(str(models_path), as_attachment=True, download_name='ollama-models.tar.gz')
+        else:
+            return jsonify({'error': 'Model cache not found. Run profile-machine.py --cache-models first'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/bootstrap.sh', methods=['GET'])
+def bootstrap_script():
+    """Serve bootstrap script for patient setup"""
+    script = f'''#!/usr/bin/env bash
+# RoadNerd Patient Bootstrap Script
+set -euo pipefail
+
+NERD_URL="${{1:-http://10.55.0.1:8080}}"
+INSTALL_DIR="$HOME/.roadnerd"
+
+echo "🤖 RoadNerd Patient Bootstrap"
+echo "Connecting to Nerd at: $NERD_URL"
+
+# Create installation directory
+mkdir -p "$INSTALL_DIR"
+cd "$INSTALL_DIR"
+
+# Download client
+echo "📥 Downloading RoadNerd client..."
+curl -fsSL "$NERD_URL/download/client.py" -o roadnerd_client.py
+chmod +x roadnerd_client.py
+
+# Check machine capability
+TOTAL_RAM=$(free -m | awk 'NR==2{{printf "%.0f", $2}}')
+echo "📊 Detected ${{TOTAL_RAM}}MB RAM"
+
+if [ "$TOTAL_RAM" -gt 16000 ]; then
+    echo "🚀 High-capacity machine - downloading model cache..."
+    if curl -fsSL "$NERD_URL/download/ollama-models.tar.gz" -o ollama-models.tar.gz 2>/dev/null; then
+        echo "🔧 Setting up Ollama..."
+        if ! command -v ollama &> /dev/null; then
+            echo "Installing Ollama..."
+            curl -fsSL https://ollama.com/install.sh | sh
+        fi
+        
+        echo "📦 Extracting models..."
+        mkdir -p ~/.ollama
+        tar xzf ollama-models.tar.gz -C ~/.ollama
+        
+        echo "🎯 Patient is now ready to be a Nerd!"
+        echo "Run: ollama serve & && python3 roadnerd_server.py"
+    else
+        echo "⚠️  Model cache not available, will connect as client"
+        python3 roadnerd_client.py "$NERD_URL"
+    fi
+else
+    echo "💻 Standard machine - connecting as client"
+    python3 roadnerd_client.py "$NERD_URL" 
+fi
+'''
+    
+    response = make_response(script)
+    response.headers['Content-Type'] = 'text/x-shellscript'
+    response.headers['Content-Disposition'] = 'attachment; filename="bootstrap.sh"'
+    return response
 
 @app.route('/api/diagnose', methods=['POST'])
 def api_diagnose():

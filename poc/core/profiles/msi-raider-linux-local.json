@@ -1,0 +1,130 @@
+{
+  "profile_name": "msi-raider-linux-local",
+  "generated": "2025-09-08T16:10:09.675963",
+  "hardware": {
+    "cpu": {
+      "architecture": "x86_64",
+      "logical_cores": 32,
+      "model": "Intel(R) Core(TM) i9-14900HX",
+      "threads_per_core": 2,
+      "cores_per_socket": 24,
+      "max_freq_mhz": 5800.0
+    },
+    "memory": {
+      "total_mb": 29772,
+      "total_gb": 29.1,
+      "available_mb": 23624,
+      "available_gb": 23.1
+    },
+    "storage": {
+      "filesystem": "/dev/nvme0n1p8",
+      "total": "240G",
+      "used": "52G",
+      "available": "176G",
+      "use_percent": "23%"
+    },
+    "graphics": [
+      {
+        "type": "integrated",
+        "model": "Intel Corporation Raptor Lake-S UHD Graphics (rev 04)",
+        "compute_capable": false
+      },
+      {
+        "type": "discrete",
+        "model": "NVIDIA Corporation AD106M [GeForce RTX 4070 Max-Q / Mobile] (rev a1)",
+        "compute_capable": true
+      }
+    ]
+  },
+  "software": {
+    "os": {
+      "distribution": "Ubuntu",
+      "version": "24.04.3 LTS (Noble Numbat)",
+      "codename": "noble",
+      "kernel": "6.14.0-29-generic"
+    },
+    "python": {
+      "version": "3.12.3",
+      "implementation": "CPython"
+    },
+    "ai_stack": {
+      "ollama": {
+        "installed": true,
+        "path": "/usr/local/bin/ollama",
+        "models": [
+          {
+            "name": "llama3:8b",
+            "id": "365c0bd3c000",
+            "size": "4.7"
+          },
+          {
+            "name": "llama3.2:3b",
+            "id": "a80c4f17acd5",
+            "size": "2.0"
+          },
+          {
+            "name": "llama3.2:1b",
+            "id": "baf6a787fdff",
+            "size": "1.3"
+          }
+        ]
+      },
+      "cuda_available": true
+    }
+  },
+  "network": {
+    "interfaces": [
+      {
+        "name": "lo",
+        "status": "active",
+        "type": "loopback",
+        "ips": [
+          {
+            "ip": "127.0.0.1",
+            "cidr": "8",
+            "scope": "local"
+          }
+        ]
+      },
+      {
+        "name": "enp58s0",
+        "status": "active",
+        "type": "ethernet",
+        "ips": [
+          {
+            "ip": "10.55.0.2",
+            "cidr": "24",
+            "scope": "global"
+          }
+        ]
+      },
+      {
+        "name": "wlp59s0f0",
+        "status": "active",
+        "type": "wifi",
+        "ips": [
+          {
+            "ip": "172.20.4.96",
+            "cidr": "16",
+            "scope": "global"
+          }
+        ]
+      },
+      {
+        "name": "docker0",
+        "status": "active",
+        "type": "virtual",
+        "ips": [
+          {
+            "ip": "172.17.0.1",
+            "cidr": "16",
+            "scope": "global"
+          }
+        ]
+      }
+    ]
+  },
+  "llm_benchmarks": {},
+  "performance_recommendations": {},
+  "common_issues": []
+}
