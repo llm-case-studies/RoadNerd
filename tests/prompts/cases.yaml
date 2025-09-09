@@ -14,7 +14,7 @@
   issue: "DNS resolution is failing on Ubuntu."
   expect_any:
     - "systemd-resolved"
-    - "resolv\.conf"
+    - "resolv.conf"
     - "dig|nslookup"
 
 - id: iface_up_no_net
