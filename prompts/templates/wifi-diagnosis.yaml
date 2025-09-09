@@ -1,0 +1,45 @@
+templates:
+  # Ubuntu-specific WiFi troubleshooting
+  ubuntu_wifi_modern:
+    model_tiers: ["1b", "3b", "7b", "13b"]
+    version: "1.0"
+    template: |
+      System: Ubuntu {distro}
+      Issue: {issue}
+      Connectivity: DNS={dns}, Gateway={gateway}
+      
+      For WiFi issues on modern Ubuntu, use NetworkManager tools:
+      - Check status: nmcli dev status
+      - Check WiFi radio: rfkill list
+      - Restart NetworkManager: sudo systemctl restart NetworkManager
+      
+      Provide a specific NetworkManager command to diagnose this WiFi issue.
+    
+  # Generic fallback for non-Ubuntu systems  
+  generic_wifi:
+    model_tiers: ["1b", "3b", "7b", "13b", "20b", "34b"]
+    version: "1.0"
+    template: |
+      System: {platform} {distro}
+      Issue: {issue}
+      Connectivity: DNS={dns}, Gateway={gateway}
+      
+      Provide a specific command to diagnose or fix this WiFi issue. Be concise.
+
+  # Large model gets more sophisticated prompting
+  wifi_advanced:
+    model_tiers: ["20b", "34b"]
+    version: "1.0" 
+    template: |
+      System: {platform} {distro}
+      Issue: {issue}
+      Connectivity: DNS={dns}, Gateway={gateway}
+      
+      As an expert system administrator, analyze this WiFi connectivity issue:
+      
+      1. Consider the operating system and available tools
+      2. Prioritize modern approaches (NetworkManager on Ubuntu, wpa_supplicant elsewhere)
+      3. Suggest both diagnostic commands and potential fixes
+      4. Include safety considerations
+      
+      Provide your analysis and recommended first diagnostic step.

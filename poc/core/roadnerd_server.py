@@ -298,6 +298,228 @@ def _log_llm_run(record: Dict) -> None:
         # Never break the API on logging errors
         pass
 
+
+# BACKLOG++ Implementation: Brainstorm/Judge System
+import uuid
+
+class Idea:
+    """Structured representation of a diagnostic/fix idea."""
+    def __init__(self, hypothesis: str, category: str, why: str, 
+                 checks: List[str] = None, fixes: List[str] = None, 
+                 risk: str = "low", confidence: float = 0.5):
+        self.id = str(uuid.uuid4())[:8]
+        self.hypothesis = hypothesis
+        self.category = category  # wifi, dns, network, performance, etc.
+        self.why = why
+        self.checks = checks or []
+        self.fixes = fixes or []
+        self.risk = risk  # low, medium, high
+        self.confidence = confidence
+        self.evidence = {}  # Will hold probe results
+    
+    def to_dict(self) -> Dict:
+        return {
+            'id': self.id,
+            'hypothesis': self.hypothesis,
+            'category': self.category,
+            'why': self.why,
+            'checks': self.checks,
+            'fixes': self.fixes,
+            'risk': self.risk,
+            'confidence': self.confidence,
+            'evidence': self.evidence
+        }
+
+class BrainstormEngine:
+    """Generate multiple structured ideas for a given issue."""
+    
+    @staticmethod
+    def generate_ideas(issue: str, n: int = 5, creativity: int = 1) -> List[Idea]:
+        """Generate N ideas with specified creativity level (0-3)."""
+        
+        # Adjust LLM parameters based on creativity
+        temperature_map = {0: 0.0, 1: 0.3, 2: 0.7, 3: 1.0}
+        temperature = temperature_map.get(creativity, 0.3)
+        
+        # Build brainstorming prompt
+        system_info = SystemDiagnostics.get_system_info()
+        connectivity = SystemDiagnostics.check_connectivity()
+        
+        prompt = f"""You are an expert system administrator brainstorming diagnostic approaches.
+
+System: {system_info['platform']} {system_info.get('distro', '')}
+Issue: {issue}
+Connectivity: DNS={connectivity['dns']}, Gateway={connectivity['gateway']}
+
+Generate {n} different diagnostic hypotheses. For each hypothesis, provide:
+1. HYPOTHESIS: What might be causing this issue
+2. CATEGORY: wifi/dns/network/performance/system/hardware
+3. WHY: Brief reasoning for this hypothesis  
+4. CHECKS: Specific read-only commands to test this hypothesis
+5. FIXES: Potential solutions (if hypothesis is confirmed)
+6. RISK: low/medium/high for the proposed fixes
+
+Format each as JSON:
+{{"hypothesis": "...", "category": "...", "why": "...", "checks": ["..."], "fixes": ["..."], "risk": "low"}}
+
+Be creative and consider multiple angles. Include both common and uncommon causes."""
+
+        # Get LLM response with higher creativity
+        original_temp = os.getenv('RN_TEMP', '0')
+        os.environ['RN_TEMP'] = str(temperature)
+        
+        try:
+            llm_response = LLMInterface.get_response(prompt)
+            ideas = BrainstormEngine._parse_ideas_response(llm_response, issue)
+        finally:
+            # Restore original temperature
+            if original_temp:
+                os.environ['RN_TEMP'] = original_temp
+            else:
+                os.environ.pop('RN_TEMP', None)
+        
+        return ideas[:n]  # Ensure we return exactly n ideas
+    
+    @staticmethod
+    def _parse_ideas_response(response: str, issue: str) -> List[Idea]:
+        """Parse LLM response into structured Idea objects."""
+        ideas = []
+        
+        # Try to extract JSON objects from the response
+        lines = response.split('\n')
+        for line in lines:
+            line = line.strip()
+            if line.startswith('{') and line.endswith('}'):
+                try:
+                    idea_data = json.loads(line)
+                    idea = Idea(
+                        hypothesis=idea_data.get('hypothesis', 'Unknown hypothesis'),
+                        category=idea_data.get('category', 'general'), 
+                        why=idea_data.get('why', 'No reasoning provided'),
+                        checks=idea_data.get('checks', []),
+                        fixes=idea_data.get('fixes', []),
+                        risk=idea_data.get('risk', 'medium')
+                    )
+                    ideas.append(idea)
+                except json.JSONDecodeError:
+                    continue
+        
+        # Fallback: if no valid JSON found, create a generic idea
+        if not ideas:
+            idea = Idea(
+                hypothesis="Generic troubleshooting approach",
+                category="general",
+                why="LLM response could not be parsed into structured ideas",
+                checks=["echo 'Manual analysis required'"],
+                fixes=["Analyze the issue manually"],
+                risk="low"
+            )
+            ideas.append(idea)
+        
+        return ideas
+
+class JudgeEngine:
+    """Score and rank ideas using deterministic criteria."""
+    
+    @staticmethod
+    def judge_ideas(ideas: List[Idea], issue: str) -> List[Dict]:
+        """Score and rank ideas, return ordered list with rationale."""
+        
+        scored_ideas = []
+        system_info = SystemDiagnostics.get_system_info()
+        
+        for idea in ideas:
+            scores = JudgeEngine._score_idea(idea, issue, system_info)
+            
+            # Calculate weighted total score
+            total_score = (
+                scores['safety'] * 0.3 +
+                scores['success_likelihood'] * 0.4 +
+                scores['cost'] * 0.2 +
+                scores['determinism'] * 0.1
+            )
+            
+            scored_ideas.append({
+                'idea': idea.to_dict(),
+                'scores': scores,
+                'total_score': total_score,
+                'rationale': JudgeEngine._generate_rationale(idea, scores)
+            })
+        
+        # Sort by total score (descending)
+        scored_ideas.sort(key=lambda x: x['total_score'], reverse=True)
+        
+        return scored_ideas
+    
+    @staticmethod
+    def _score_idea(idea: Idea, issue: str, system_info: Dict) -> Dict:
+        """Score an idea across multiple criteria (0.0 - 1.0)."""
+        scores = {}
+        
+        # Safety score (higher = safer)
+        risk_map = {'low': 0.9, 'medium': 0.6, 'high': 0.2}
+        scores['safety'] = risk_map.get(idea.risk, 0.5)
+        
+        # Success likelihood (higher = more likely to work)
+        likelihood = 0.5  # Default
+        
+        # Boost score for OS-appropriate suggestions
+        if 'ubuntu' in system_info.get('distro', '').lower():
+            if any('nmcli' in check.lower() for check in idea.checks):
+                likelihood += 0.3
+            if any('systemctl' in check.lower() for check in idea.checks):
+                likelihood += 0.2
+        
+        # Boost for category match
+        issue_lower = issue.lower()
+        if (idea.category == 'wifi' and any(w in issue_lower for w in ['wifi', 'wireless'])) or \
+           (idea.category == 'dns' and any(w in issue_lower for w in ['dns', 'resolution'])) or \
+           (idea.category == 'network' and any(w in issue_lower for w in ['network', 'interface'])):
+            likelihood += 0.2
+            
+        scores['success_likelihood'] = min(likelihood, 1.0)
+        
+        # Cost score (higher = cheaper/faster)
+        cost = 0.8  # Default: most commands are cheap
+        if any('reboot' in fix.lower() for fix in idea.fixes):
+            cost = 0.3  # Reboots are expensive
+        if any('reinstall' in fix.lower() for fix in idea.fixes):
+            cost = 0.1  # Reinstalls are very expensive
+            
+        scores['cost'] = cost
+        
+        # Determinism score (higher = more predictable)  
+        determinism = 0.7  # Default
+        if len(idea.checks) > 0:
+            determinism += 0.2  # Has diagnostic steps
+        if len(idea.fixes) > 1:
+            determinism -= 0.1  # Multiple fixes = less predictable
+            
+        scores['determinism'] = min(determinism, 1.0)
+        
+        return scores
+    
+    @staticmethod
+    def _generate_rationale(idea: Idea, scores: Dict) -> str:
+        """Generate human-readable rationale for the scoring."""
+        rationale = f"Scored {scores.get('total_score', 0):.2f}/1.0. "
+        
+        if scores['safety'] < 0.5:
+            rationale += "⚠️  High risk approach. "
+        elif scores['safety'] > 0.8:
+            rationale += "✅ Safe approach. "
+            
+        if scores['success_likelihood'] > 0.7:
+            rationale += "Strong success indicators. "
+        elif scores['success_likelihood'] < 0.4:
+            rationale += "Low success probability. "
+            
+        if scores['cost'] < 0.5:
+            rationale += "High cost/time investment."
+        
+        return rationale.strip()
+
+
 @app.route('/')
 def home():
     """Serve a simple web interface"""
@@ -653,6 +875,178 @@ def api_scan_network():
         diagnostics['dns_config'] = 'Could not read DNS config'
     
     return jsonify(diagnostics)
+
+
+# BACKLOG++ API Endpoints
+
+@app.route('/api/ideas/brainstorm', methods=['POST'])
+def api_brainstorm():
+    """Generate multiple structured diagnostic ideas (high creativity)."""
+    data = request.get_json()
+    
+    if not data or 'issue' not in data:
+        return jsonify({'error': 'Missing issue parameter'}), 400
+    
+    issue = data['issue']
+    n = data.get('n', 5)  # Number of ideas to generate
+    creativity = data.get('creativity', 2)  # 0-3 scale
+    
+    try:
+        # Generate ideas with high exploration
+        ideas = BrainstormEngine.generate_ideas(issue, n, creativity)
+        
+        # Log the brainstorming session
+        _log_llm_run({
+            'mode': 'brainstorm',
+            'timestamp': datetime.now().isoformat(),
+            'issue': issue,
+            'creativity': creativity,
+            'ideas_generated': len(ideas),
+            'server': {
+                'backend': CONFIG['llm_backend'],
+                'model': CONFIG['model']
+            },
+            'ideas': [idea.to_dict() for idea in ideas]
+        })
+        
+        return jsonify({
+            'ideas': [idea.to_dict() for idea in ideas],
+            'meta': {
+                'count': len(ideas),
+                'creativity': creativity,
+                'timestamp': datetime.now().isoformat()
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Brainstorming failed: {str(e)}'}), 500
+
+@app.route('/api/ideas/judge', methods=['POST']) 
+def api_judge():
+    """Score and rank ideas using deterministic criteria (temperature=0)."""
+    data = request.get_json()
+    
+    if not data or 'ideas' not in data or 'issue' not in data:
+        return jsonify({'error': 'Missing ideas or issue parameter'}), 400
+    
+    issue = data['issue']
+    ideas_data = data['ideas']
+    
+    try:
+        # Convert dict data back to Idea objects
+        ideas = []
+        for idea_dict in ideas_data:
+            idea = Idea(
+                hypothesis=idea_dict.get('hypothesis', ''),
+                category=idea_dict.get('category', 'general'),
+                why=idea_dict.get('why', ''),
+                checks=idea_dict.get('checks', []),
+                fixes=idea_dict.get('fixes', []),
+                risk=idea_dict.get('risk', 'medium')
+            )
+            idea.id = idea_dict.get('id', idea.id)  # Preserve original ID
+            ideas.append(idea)
+        
+        # Judge and rank ideas
+        ranked = JudgeEngine.judge_ideas(ideas, issue)
+        
+        # Log the judging session
+        _log_llm_run({
+            'mode': 'judge',
+            'timestamp': datetime.now().isoformat(),
+            'issue': issue,
+            'ideas_judged': len(ideas),
+            'top_score': ranked[0]['total_score'] if ranked else 0,
+            'server': {
+                'backend': CONFIG['llm_backend'],
+                'model': CONFIG['model']
+            },
+            'ranking': [r['idea']['id'] for r in ranked]
+        })
+        
+        return jsonify({
+            'ranked': ranked,
+            'rationale': f"Judged {len(ideas)} ideas using safety, success likelihood, cost, and determinism criteria.",
+            'meta': {
+                'judged_count': len(ideas),
+                'timestamp': datetime.now().isoformat()
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Judging failed: {str(e)}'}), 500
+
+@app.route('/api/ideas/probe', methods=['POST'])
+def api_probe():
+    """Run safe diagnostic checks and attach evidence to ideas.""" 
+    data = request.get_json()
+    
+    if not data or 'ideas' not in data:
+        return jsonify({'error': 'Missing ideas parameter'}), 400
+    
+    ideas_data = data['ideas']
+    run_checks = data.get('run_checks', True)
+    
+    try:
+        probed_ideas = []
+        
+        for idea_dict in ideas_data:
+            idea = idea_dict.copy()
+            
+            if run_checks and 'checks' in idea:
+                evidence = {}
+                
+                # Only run whitelisted read-only commands
+                safe_commands = ['nmcli', 'ip addr', 'ip route', 'rfkill list', 
+                               'systemctl status', 'journalctl', 'dig', 'nslookup']
+                
+                for check in idea['checks'][:3]:  # Limit to first 3 checks
+                    if any(cmd in check.lower() for cmd in safe_commands):
+                        try:
+                            # Execute safe read-only command
+                            analysis = CommandExecutor.analyze_command(check)
+                            if analysis['risk_level'] == 'low':
+                                result = subprocess.run(
+                                    check, shell=True, 
+                                    capture_output=True, text=True, 
+                                    timeout=5
+                                )
+                                evidence[check] = {
+                                    'stdout': result.stdout[:500],  # Truncate
+                                    'stderr': result.stderr[:200],
+                                    'returncode': result.returncode
+                                }
+                        except Exception as e:
+                            evidence[check] = {'error': str(e)}
+                
+                idea['evidence'] = evidence
+            
+            probed_ideas.append(idea)
+        
+        # Log the probing session
+        _log_llm_run({
+            'mode': 'probe',
+            'timestamp': datetime.now().isoformat(),
+            'ideas_probed': len(probed_ideas),
+            'checks_run': run_checks,
+            'server': {
+                'backend': CONFIG['llm_backend'], 
+                'model': CONFIG['model']
+            }
+        })
+        
+        return jsonify({
+            'probed_ideas': probed_ideas,
+            'meta': {
+                'probed_count': len(probed_ideas),
+                'checks_executed': run_checks,
+                'timestamp': datetime.now().isoformat()
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Probing failed: {str(e)}'}), 500
+
 
 def print_connection_guidance():
     """Show connection guidance for direct Ethernet setups"""

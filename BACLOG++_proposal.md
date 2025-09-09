@@ -96,9 +96,60 @@ Idea schema (minimal)
 - Zero safety incidents in judge/execution path.
 - Reproducible judge decisions at temp=0 across runs.
 
+## Intelligent Gateway Layer - NEW ARCHITECTURE INSIGHT 🧠
+
+### The Pattern We've Discovered
+Multiple RoadNerd features need "intelligent filtering":
+- **Issue Classification**: "warelass" → wifi category (typo-resistant)
+- **Smart Command History**: bash_history → relevant commands (context-aware)  
+- **Knowledge Matching**: problem → KB articles (semantic matching)
+- **Intent Detection**: user text → action type (behavior routing)
+
+### Unified Architecture Vision
+```
+[Tiny Gate Models Cluster] ←→ [Standardized Issue KB]
+├── Issue Classifier (DistilBERT ~67MB)     │
+├── Command Relevance (TinyBERT ~14MB)      │
+├── Knowledge Matcher (MiniLM ~90MB)        │
+└── Intent Detector (MobileBERT ~100MB)     │
+          ↓                                 │
+[External Prompt Templates] ←───────────────┘
+```
+
+### Training Data Structure
+```yaml
+# issues/wifi-examples.yaml  
+category: wifi
+variants: ["wifi", "wireless", "warelass", "wlan", "internet connection"]
+kb_attachments: ["ubuntu-networkmanager.md", "rfkill-guide.md"]
+command_history_matches: ["nmcli", "rfkill", "systemctl restart NetworkManager"]
+```
+
+### Benefits
+- **Typo-resistant**: "warelass" correctly routes to WiFi prompts
+- **Context-aware**: Command suggestions based on current issue
+- **Externally configurable**: No code changes for new patterns
+- **Fast**: All gate models run on CPU while main LLMs use GPU
+- **Scalable**: Shared embeddings across all filtering tasks
+
+### Research Questions
+- Can we fine-tune SetFit for few-shot issue classification?
+- Should gate models share embeddings for memory efficiency?
+- How to handle multi-category issues (WiFi + DNS problems)?
+- Can we auto-generate training data from JSONL logs?
+
+### Implementation Phases
+- **Phase 0**: Current JSONL logging validates issue→outcome patterns
+- **Phase 1**: External prompt templates with fuzzy matching
+- **Phase 2**: Tiny classifier for robust issue categorization  
+- **Phase 3**: Unified intelligent gateway for all filtering needs
+
+This transforms RoadNerd from rule-based routing to ML-powered understanding.
+
 ## Next Steps
 1) Decide API shape (Option A single endpoint vs Option B dedicated ideas endpoints).
-2) Add JSONL logging now (Phase 0) and a tiny aggregator script.
+2) Add JSONL logging now (Phase 0) and a tiny aggregator script. ✅ COMPLETED
 3) Externalize prompt templates and add hot‑reload.
-4) Implement brainstorm/judge + client commands; update `/api-docs` to exercise new flows.
-5) Integrate with MCP/Playwright to run suites on this machine against local LLMs.
+4) **NEW**: Research and prototype tiny gate models for intelligent filtering.
+5) Implement brainstorm/judge + client commands; update `/api-docs` to exercise new flows.
+6) Integrate with MCP/Playwright to run suites on this machine against local LLMs.
