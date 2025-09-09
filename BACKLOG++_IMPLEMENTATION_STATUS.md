@@ -1,5 +1,12 @@
 # BACKLOG++ Implementation Status - Sept 9, 2025
 
+## 🚀 What's New (since last update)
+- Prompt templates with hot‑reload (diagnose/brainstorm) and category‑aware context
+- Lightweight input detector + category classifier (heuristics; MiniLM optional)
+- Hybrid retrieval scaffolding over docs/profiles (BM25‑like + embeddings optional)
+- Ideas API fully exercised via /api-docs; disambiguation runner scripts added
+- JSONL logging now captures classification metadata for evaluate/compare
+
 ## ✅ SUCCESSFULLY IMPLEMENTED
 
 ### Core BACKLOG++ Framework

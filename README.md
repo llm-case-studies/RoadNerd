@@ -21,6 +21,11 @@ python3 roadnerd_client.py
 # Or specify server: python3 roadnerd_client.py http://10.55.0.1:8080
 ```
 
+New: API Console and Ideas Workflow
+- Open the API console in a browser: `http://<server>:8080/api-docs`  
+  Run status/diagnose/execute and the new ideas endpoints (brainstorm, probe, judge) interactively.
+- Prompt templates hot‑reload from `poc/core/prompts/` (override with `RN_PROMPT_DIR`). No server restart needed.
+
 ## What is RoadNerd?
 
 RoadNerd solves the classic IT problem: **you need internet to fix internet problems**. When you're stuck in a hotel room with broken DNS, or your laptop won't connect to conference WiFi, RoadNerd provides an offline AI assistant for system troubleshooting.
@@ -54,6 +59,13 @@ RoadNerd solves the classic IT problem: **you need internet to fix internet prob
 └── deploy/                # Deployment configurations
 ```
 
+Key Developer Utilities
+- Disambiguation runner: `python3 RoadNerd/tools/run_disambiguation_flow.py --issue "Internet not working" --categories wifi,dns,network`
+- Prompt suite (Phase 0): `python3 RoadNerd/tools/run_prompt_suite.py --base-url http://localhost:8080`
+- Aggregator: `python3 RoadNerd/tools/aggregate_llm_runs.py`
+- Classifier test: `python3 RoadNerd/tools/test_classifier.py "My WiFi is not working"`
+- Retrieval test: `python3 RoadNerd/tools/test_retrieval.py --query "dns failing" --category dns`
+
 ## Real-World Testing
 
 - **Hardware**: BeeLink mini-PC ↔ MSI laptop via ethernet  
@@ -74,7 +86,7 @@ See [poc/docs/founders-story.md](poc/docs/founders-story.md) for the full develo
 
 ## Roadmap
 
-- **Immediate**: Bootstrap client download, model escalation ladder
+- **Immediate**: Bootstrap client download, model escalation ladder, ideas API (brainstorm→probe→judge), prompt templates with hot‑reload, disambiguation flow
 - **Phase 2**: Command history with semantic search, shell integration  
 - **Phase 3**: Boot-loop diagnostic system, collaborative intelligence
 
@@ -88,4 +100,4 @@ Following the **Cave Ancestor Wisdom**: practical solutions that work in the fie
 
 **Status**: Working POC with real-world validation. Ready for enhancement and broader deployment.
 
-For detailed testing results and feedback from industry experts, see the [documentation](poc/docs/).
+For detailed testing results and feedback from industry experts, see the [documentation](poc/docs/), the [Release Highlights](docs/marketing/RELEASE-HIGHLIGHTS.md), the [One‑Pager](docs/marketing/ONE-PAGER.md), and our [Escalation Results](ESCALATION-RESULTS.md).

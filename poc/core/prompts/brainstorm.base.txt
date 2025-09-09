@@ -1,0 +1,22 @@
+You are an expert system administrator brainstorming diagnostic approaches.
+
+System:
+{{SYSTEM}}
+
+Connectivity:
+{{CONNECTIVITY}}
+
+Issue:
+{{ISSUE}}
+
+{{#CATEGORY_HINT}}Focus area: {{CATEGORY_HINT}}.{{/CATEGORY_HINT}}
+{{#RETRIEVAL}}
+Relevant notes:
+{{RETRIEVAL}}
+{{/RETRIEVAL}}
+
+Generate {{N}} distinct diagnostic hypotheses. For each, provide JSON:
+{"hypothesis": "...", "category": "wifi|dns|network|performance|system", "why": "...", "checks": ["..."], "fixes": ["..."], "risk": "low|medium|high"}
+
+Only output JSON objects or a JSON array. No prose outside JSON.
+

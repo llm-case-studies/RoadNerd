@@ -28,12 +28,20 @@ except ImportError:
 app = Flask(__name__)
 CORS(app)  # Allow cross-origin requests
 
+# Ensure local imports (classify.py, retrieval.py) resolve when running as a script
+try:
+    if str(Path(__file__).parent) not in sys.path:
+        sys.path.insert(0, str(Path(__file__).parent))
+except Exception:
+    pass
+
 # Configuration
 CONFIG = {
     'llm_backend': 'ollama',  # or 'llamafile' or 'gpt4all'
     'model': 'llama3.2',
     'port': 8080,
-    'safe_mode': True  # Don't execute commands automatically
+    'safe_mode': True,  # Don't execute commands automatically
+    'bind_host': '0.0.0.0'  # Default bind host (override via RN_BIND or RN_BIND_HOST)
 }
 
 # Environment overrides for easy experimentation
@@ -45,6 +53,10 @@ except Exception:
     pass
 sm = os.getenv('RN_SAFE_MODE', str(CONFIG['safe_mode']))
 CONFIG['safe_mode'] = sm.lower() in ('1', 'true', 'yes', 'on')
+# Bind host: explicit env takes precedence; RN_PROD defaults to 10.55.0.1
+CONFIG['bind_host'] = os.getenv('RN_BIND', os.getenv('RN_BIND_HOST', CONFIG['bind_host']))
+if os.getenv('RN_PROD', '0').lower() in ('1', 'true', 'yes', 'on') and not os.getenv('RN_BIND') and not os.getenv('RN_BIND_HOST'):
+    CONFIG['bind_host'] = '10.55.0.1'
 
 # Knowledge base - embedded for portability
 KNOWLEDGE_BASE = {
@@ -173,24 +185,31 @@ class LLMInterface:
     """Interface to various LLM backends"""
     
     @staticmethod
-    def query_ollama(prompt: str) -> str:
+    def query_ollama(prompt: str, options_overrides: Optional[Dict] = None) -> str:
         """Query Ollama API"""
         try:
             import requests
             base = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
-            # Deterministic-ish defaults for fast testing
+            # Defaults from environment
             options = {
                 'temperature': float(os.getenv('RN_TEMP', '0')),
-                'num_predict': int(os.getenv('RN_NUM_PREDICT', '128'))
+                'num_predict': int(os.getenv('RN_NUM_PREDICT', '128')),
             }
-            payload = {'model': CONFIG['model'], 'prompt': prompt, 'stream': False, 'options': options}
+            if options_overrides:
+                options.update({k: v for k, v in options_overrides.items() if v is not None})
+            payload = {
+                'model': CONFIG['model'],
+                'prompt': prompt,
+                'stream': False,
+                'options': options,
+            }
             response = requests.post(f'{base}/api/generate', json=payload)
             return response.json().get('response', 'No response from Ollama')
         except Exception as e:
             return f"Ollama not available: {e}"
     
     @staticmethod
-    def query_llamafile(prompt: str) -> str:
+    def query_llamafile(prompt: str, options_overrides: Optional[Dict] = None) -> str:
         """Query llamafile server"""
         try:
             import requests
@@ -201,14 +220,68 @@ class LLMInterface:
             return f"Llamafile not available: {e}"
     
     @staticmethod
-    def get_response(prompt: str) -> str:
-        """Get response from configured LLM"""
+    def get_response(prompt: str, *, temperature: Optional[float] = None, num_predict: Optional[int] = None, top_p: Optional[float] = None) -> str:
+        """Get response from configured LLM with optional per-request options."""
+        overrides = {'temperature': temperature, 'num_predict': num_predict}
         if CONFIG['llm_backend'] == 'ollama':
-            return LLMInterface.query_ollama(prompt)
+            return LLMInterface.query_ollama(prompt, options_overrides=overrides)
         elif CONFIG['llm_backend'] == 'llamafile':
-            return LLMInterface.query_llamafile(prompt)
+            return LLMInterface.query_llamafile(prompt, options_overrides=overrides)
         else:
             return "No LLM backend configured"
+
+
+# Prompt loader and simple templating
+def _load_template(kind: str, category_hint: Optional[str] = None) -> str:
+    base_dir = os.getenv('RN_PROMPT_DIR')
+    search_dirs = []
+    if base_dir:
+        search_dirs.append(Path(base_dir))
+    search_dirs.append(Path(__file__).parent / 'prompts')
+
+    names = []
+    if category_hint:
+        names.append(f"{kind}.{category_hint}.txt")
+    names.append(f"{kind}.base.txt")
+
+    for d in search_dirs:
+        for name in names:
+            p = d / name
+            if p.exists():
+                try:
+                    return p.read_text(encoding='utf-8')
+                except Exception:
+                    continue
+    # Fallback minimal template
+    return "Issue: {{ISSUE}}\nSystem: {{SYSTEM}}\nChecks and fixes please."
+
+
+def _render_template(tpl: str, ctx: Dict[str, str]) -> str:
+    # Very small mustache-like rendering for optional blocks
+    def toggle_block(text: str, key: str, value: str) -> str:
+        start = f"{{{{#{key}}}}}"
+        end = f"{{{{/{key}}}}}"
+        while True:
+            i = text.find(start)
+            if i == -1:
+                break
+            j = text.find(end, i)
+            if j == -1:
+                break
+            inner = text[i + len(start): j]
+            replacement = inner if value else ''
+            text = text[:i] + replacement + text[j + len(end):]
+        return text
+
+    out = tpl
+    # Optional blocks
+    out = toggle_block(out, 'CATEGORY_HINT', ctx.get('CATEGORY_HINT') or '')
+    out = toggle_block(out, 'RETRIEVAL', ctx.get('RETRIEVAL') or '')
+    # Simple replacements
+    for k, v in ctx.items():
+        out = out.replace(f"{{{{{k}}}}}", v or '')
+    return out
+
 
 class CommandExecutor:
     """Safely execute system commands"""
@@ -334,88 +407,126 @@ class BrainstormEngine:
     """Generate multiple structured ideas for a given issue."""
     
     @staticmethod
-    def generate_ideas(issue: str, n: int = 5, creativity: int = 1) -> List[Idea]:
+    def generate_ideas(issue: str, n: int = 5, creativity: int = 1, category_hint: Optional[str] = None) -> List[Idea]:
         """Generate N ideas with specified creativity level (0-3)."""
         
         # Adjust LLM parameters based on creativity
         temperature_map = {0: 0.0, 1: 0.3, 2: 0.7, 3: 1.0}
         temperature = temperature_map.get(creativity, 0.3)
         
-        # Build brainstorming prompt
+        # Build brainstorming prompt (template, optional category hint)
         system_info = SystemDiagnostics.get_system_info()
         connectivity = SystemDiagnostics.check_connectivity()
-        
-        prompt = f"""You are an expert system administrator brainstorming diagnostic approaches.
+        tpl = _load_template('brainstorm', category_hint=category_hint)
+        ctx = {
+            'SYSTEM': json.dumps(system_info, ensure_ascii=False),
+            'CONNECTIVITY': json.dumps(connectivity, ensure_ascii=False),
+            'ISSUE': issue,
+            'CATEGORY_HINT': category_hint or '',
+            'N': str(n),
+            'RETRIEVAL': '',
+        }
+        prompt = _render_template(tpl, ctx)
 
-System: {system_info['platform']} {system_info.get('distro', '')}
-Issue: {issue}
-Connectivity: DNS={connectivity['dns']}, Gateway={connectivity['gateway']}
-
-Generate {n} different diagnostic hypotheses. For each hypothesis, provide:
-1. HYPOTHESIS: What might be causing this issue
-2. CATEGORY: wifi/dns/network/performance/system/hardware
-3. WHY: Brief reasoning for this hypothesis  
-4. CHECKS: Specific read-only commands to test this hypothesis
-5. FIXES: Potential solutions (if hypothesis is confirmed)
-6. RISK: low/medium/high for the proposed fixes
-
-Format each as JSON:
-{{"hypothesis": "...", "category": "...", "why": "...", "checks": ["..."], "fixes": ["..."], "risk": "low"}}
-
-Be creative and consider multiple angles. Include both common and uncommon causes."""
-
-        # Get LLM response with higher creativity
-        original_temp = os.getenv('RN_TEMP', '0')
-        os.environ['RN_TEMP'] = str(temperature)
-        
-        try:
-            llm_response = LLMInterface.get_response(prompt)
-            ideas = BrainstormEngine._parse_ideas_response(llm_response, issue)
-        finally:
-            # Restore original temperature
-            if original_temp:
-                os.environ['RN_TEMP'] = original_temp
-            else:
-                os.environ.pop('RN_TEMP', None)
+        # Get LLM response with per-request creativity
+        llm_response = LLMInterface.get_response(
+            prompt,
+            temperature=temperature,
+            num_predict=256 if n > 5 else 128,
+        )
+        ideas = BrainstormEngine._parse_ideas_response(llm_response, issue)
         
         return ideas[:n]  # Ensure we return exactly n ideas
     
     @staticmethod
     def _parse_ideas_response(response: str, issue: str) -> List[Idea]:
-        """Parse LLM response into structured Idea objects."""
-        ideas = []
-        
-        # Try to extract JSON objects from the response
-        lines = response.split('\n')
-        for line in lines:
-            line = line.strip()
-            if line.startswith('{') and line.endswith('}'):
-                try:
-                    idea_data = json.loads(line)
-                    idea = Idea(
-                        hypothesis=idea_data.get('hypothesis', 'Unknown hypothesis'),
-                        category=idea_data.get('category', 'general'), 
-                        why=idea_data.get('why', 'No reasoning provided'),
-                        checks=idea_data.get('checks', []),
-                        fixes=idea_data.get('fixes', []),
-                        risk=idea_data.get('risk', 'medium')
-                    )
-                    ideas.append(idea)
-                except json.JSONDecodeError:
-                    continue
-        
-        # Fallback: if no valid JSON found, create a generic idea
+        """Parse LLM response into structured Idea objects (tolerant of arrays, fences)."""
+        def to_idea(obj: Dict) -> Idea:
+            return Idea(
+                hypothesis=obj.get('hypothesis', 'Unknown hypothesis'),
+                category=obj.get('category', 'general'),
+                why=obj.get('why', 'No reasoning provided'),
+                checks=obj.get('checks', []),
+                fixes=obj.get('fixes', []),
+                risk=obj.get('risk', 'medium')
+            )
+
+        ideas: List[Idea] = []
+
+        text = response or ''
+
+        # 1) Direct JSON parse (array or object)
+        try:
+            data = json.loads(text)
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        ideas.append(to_idea(item))
+            elif isinstance(data, dict):
+                # Possibly {"ideas": [...]}
+                if isinstance(data.get('ideas'), list):
+                    for item in data['ideas']:
+                        if isinstance(item, dict):
+                            ideas.append(to_idea(item))
+                else:
+                    ideas.append(to_idea(data))
+        except Exception:
+            pass
+
+        # 2) Parse fenced code blocks ```json ... ```
         if not ideas:
-            idea = Idea(
+            import re
+            fence_pattern = re.compile(r"```(?:json)?\n(.*?)```", re.DOTALL | re.IGNORECASE)
+            for block in fence_pattern.findall(text):
+                block = block.strip()
+                try:
+                    blk = json.loads(block)
+                    if isinstance(blk, list):
+                        for item in blk:
+                            if isinstance(item, dict):
+                                ideas.append(to_idea(item))
+                    elif isinstance(blk, dict):
+                        if isinstance(blk.get('ideas'), list):
+                            for item in blk['ideas']:
+                                if isinstance(item, dict):
+                                    ideas.append(to_idea(item))
+                        else:
+                            ideas.append(to_idea(blk))
+                except Exception:
+                    continue
+
+        # 3) Curly-brace balanced objects found in text
+        if not ideas:
+            buf = []
+            depth = 0
+            for ch in text:
+                if ch == '{':
+                    depth += 1
+                if depth > 0:
+                    buf.append(ch)
+                if ch == '}':
+                    depth -= 1
+                    if depth == 0 and buf:
+                        candidate = ''.join(buf)
+                        buf = []
+                        try:
+                            obj = json.loads(candidate)
+                            if isinstance(obj, dict):
+                                ideas.append(to_idea(obj))
+                        except Exception:
+                            continue
+
+        # 4) Fallback
+        if not ideas:
+            ideas.append(Idea(
                 hypothesis="Generic troubleshooting approach",
                 category="general",
                 why="LLM response could not be parsed into structured ideas",
                 checks=["echo 'Manual analysis required'"],
                 fixes=["Analyze the issue manually"],
                 risk="low"
-            )
-            ideas.append(idea)
-        
+            ))
+
         return ideas
 
 class JudgeEngine:
@@ -614,6 +725,10 @@ def api_docs():
     <body>
       <h1>RoadNerd API Console</h1>
       <section>
+        <h2>Token (optional)</h2>
+        <label>Authorization: Bearer <input id="token" placeholder="token for gated endpoints"/></label>
+      </section>
+      <section>
         <h2>GET /api/status</h2>
         <button onclick="callStatus()">Call</button>
         <pre id="statusOut"></pre>
@@ -634,6 +749,34 @@ def api_docs():
         <pre id="execOut"></pre>
       </section>
       <section>
+        <h2>POST /api/ideas/brainstorm</h2>
+        <label>Issue</label>
+        <textarea id="issueIdeas" rows="3">DNS resolution is failing on Ubuntu.</textarea>
+        <label>N ideas</label>
+        <input id="nIdeas" value="5"/>
+        <label>Creativity (0-3)</label>
+        <input id="creativity" value="2"/>
+        <button onclick="callBrainstorm()">Brainstorm</button>
+        <pre id="brainOut"></pre>
+      </section>
+      <section>
+        <h2>POST /api/ideas/probe</h2>
+        <label>Ideas JSON (array)</label>
+        <textarea id="ideasJSON" rows="5">[{"hypothesis":"DNS misconfiguration","category":"dns","why":"resolv.conf wrong","checks":["cat /etc/resolv.conf","dig example.com"]}]</textarea>
+        <label><input id="runChecks" type="checkbox" checked/> Run checks</label>
+        <button onclick="callProbe()">Probe</button>
+        <pre id="probeOut"></pre>
+      </section>
+      <section>
+        <h2>POST /api/ideas/judge</h2>
+        <label>Issue</label>
+        <input id="issueJudge" value="DNS resolution is failing"/>
+        <label>Ideas JSON (array)</label>
+        <textarea id="ideasJudge" rows="5">[{"hypothesis":"DNS misconfiguration","category":"dns","why":"resolv.conf wrong","checks":["cat /etc/resolv.conf"],"fixes":["sudo systemctl restart systemd-resolved"],"risk":"low"}]</textarea>
+        <button onclick="callJudge()">Judge</button>
+        <pre id="judgeOut"></pre>
+      </section>
+      <section>
         <h2>POST /api/llm</h2>
         <label>Prompt</label>
         <textarea id="prompt" rows="3">What version of Ubuntu am I running?</textarea>
@@ -642,20 +785,43 @@ def api_docs():
       </section>
       <script>
         function j(o){ return JSON.stringify(o, null, 2); }
+        function headers(){
+          const t = document.getElementById('token').value.trim();
+          const h = {'Content-Type':'application/json'};
+          if (t) h['Authorization'] = 'Bearer ' + t;
+          return h;
+        }
         async function callStatus(){
           const r = await fetch('/api/status');
           document.getElementById('statusOut').textContent = j(await r.json());
         }
         async function callDiagnose(){
-          const r = await fetch('/api/diagnose', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({issue: document.getElementById('issue').value})});
+          const r = await fetch('/api/diagnose', {method:'POST', headers: headers(), body: JSON.stringify({issue: document.getElementById('issue').value})});
           document.getElementById('diagOut').textContent = j(await r.json());
         }
         async function callExecute(){
-          const r = await fetch('/api/execute', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({command: document.getElementById('cmd').value, force: document.getElementById('force').checked})});
+          const r = await fetch('/api/execute', {method:'POST', headers: headers(), body: JSON.stringify({command: document.getElementById('cmd').value, force: document.getElementById('force').checked})});
           document.getElementById('execOut').textContent = j(await r.json());
         }
+        async function callBrainstorm(){
+          const body = {issue: document.getElementById('issueIdeas').value, n: parseInt(document.getElementById('nIdeas').value||'5'), creativity: parseInt(document.getElementById('creativity').value||'2')};
+          const r = await fetch('/api/ideas/brainstorm', {method:'POST', headers: headers(), body: JSON.stringify(body)});
+          document.getElementById('brainOut').textContent = j(await r.json());
+        }
+        async function callProbe(){
+          const ideas = JSON.parse(document.getElementById('ideasJSON').value || '[]');
+          const body = {ideas: ideas, run_checks: document.getElementById('runChecks').checked};
+          const r = await fetch('/api/ideas/probe', {method:'POST', headers: headers(), body: JSON.stringify(body)});
+          document.getElementById('probeOut').textContent = j(await r.json());
+        }
+        async function callJudge(){
+          const ideas = JSON.parse(document.getElementById('ideasJudge').value || '[]');
+          const body = {issue: document.getElementById('issueJudge').value, ideas: ideas};
+          const r = await fetch('/api/ideas/judge', {method:'POST', headers: headers(), body: JSON.stringify(body)});
+          document.getElementById('judgeOut').textContent = j(await r.json());
+        }
         async function callLLM(){
-          const r = await fetch('/api/llm', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({prompt: document.getElementById('prompt').value})});
+          const r = await fetch('/api/llm', {method:'POST', headers: headers(), body: JSON.stringify({prompt: document.getElementById('prompt').value})});
           document.getElementById('llmOut').textContent = j(await r.json());
         }
       </script>
@@ -747,6 +913,23 @@ def api_diagnose():
     """Diagnose a system issue"""
     data = request.json
     issue = data.get('issue', '')
+    # Classification and retrieval (Phase A scaffolding)
+    try:
+        import classify as _clf  # local directory
+    except Exception:  # pragma: no cover
+        import poc.core.classify as _clf  # fallback for different sys.path layouts
+    try:
+        import retrieval as _ret
+    except Exception:  # pragma: no cover
+        import poc.core.retrieval as _ret
+
+    detector = _clf.InputDetector()
+    dtype = detector.detect(issue)
+    classifier = _clf.CategoryClassifier()
+    pred = classifier.classify(issue)
+    retriever = _ret.HybridRetriever()
+    snippets = retriever.search(issue, category_hint=pred.label, k=3)
+    retrieval_text = '\n'.join(f"- {s.text[:300]} (source: {Path(s.source).name})" for s in snippets)
     
     # Check knowledge base first
     kb_solution = None
@@ -756,26 +939,31 @@ def api_diagnose():
                 kb_solution = details['solutions'][0]  # Get first solution
                 break
     
-    # Prepare context for LLM
+    # Prepare context for LLM (prompt template)
     system_info = SystemDiagnostics.get_system_info()
     connectivity = SystemDiagnostics.check_connectivity()
+    tpl = _load_template('diagnose', category_hint=pred.label)
+    ctx = {
+        'SYSTEM': json.dumps(system_info, ensure_ascii=False),
+        'CONNECTIVITY': json.dumps(connectivity, ensure_ascii=False),
+        'ISSUE': issue,
+        'CATEGORY_HINT': pred.label,
+        'RETRIEVAL': retrieval_text,
+    }
+    prompt = _render_template(tpl, ctx)
     
-    prompt = f"""
-    System: {system_info['platform']} {system_info.get('distro', '')}
-    Issue: {issue}
-    Connectivity: DNS={connectivity['dns']}, Gateway={connectivity['gateway']}
-    
-    Provide a specific command to diagnose or fix this issue. Be concise.
-    """
-    
-    llm_response = LLMInterface.get_response(prompt)
+    llm_response = LLMInterface.get_response(prompt, temperature=0.0, num_predict=192)
 
     response_payload = {
         'issue': issue,
         'kb_solution': kb_solution,
         'llm_suggestion': llm_response,
         'system_context': system_info,
-        'connectivity': connectivity
+        'connectivity': connectivity,
+        'classification': {
+            'input_type': {'label': dtype.label, 'confidence': dtype.confidence},
+            'category': {'label': pred.label, 'confidence': pred.confidence, 'candidates': pred.candidates},
+        }
     }
 
     # Phase 0 logging (legacy mode)
@@ -818,9 +1006,12 @@ def api_execute():
     if not command:
         return jsonify({'error': 'No command provided'}), 400
     
-    # Override safe mode if forced
+    # Force execution is disabled unless explicitly allowed via RN_ALLOW_FORCE
     original_safe_mode = CONFIG['safe_mode']
     if force:
+        allow_force = os.getenv('RN_ALLOW_FORCE', '0').lower() in ('1', 'true', 'yes', 'on')
+        if not allow_force:
+            return jsonify({'executed': False, 'error': 'Force execution disabled. Set RN_ALLOW_FORCE=1 to enable explicitly.'}), 403
         CONFIG['safe_mode'] = False
     
     result = CommandExecutor.execute_safely(command)
@@ -890,10 +1081,38 @@ def api_brainstorm():
     issue = data['issue']
     n = data.get('n', 5)  # Number of ideas to generate
     creativity = data.get('creativity', 2)  # 0-3 scale
+    category_hint = data.get('category_hint')
+
+    # If no category_hint provided, attempt classification
+    classification = None
+    if not category_hint:
+        try:
+            import classify as _clf
+        except Exception:  # pragma: no cover
+            import poc.core.classify as _clf
+        classifier = _clf.CategoryClassifier()
+        pred = classifier.classify(issue)
+        category_hint = pred.label
+        classification = {'label': pred.label, 'confidence': pred.confidence, 'candidates': pred.candidates}
+    else:
+        classification = {'label': category_hint, 'confidence': None, 'candidates': []}
+
+    # Retrieval snippets for prompt grounding
+    retrieval_text = ''
+    try:
+        import retrieval as _ret
+    except Exception:  # pragma: no cover
+        import poc.core.retrieval as _ret
+    try:
+        retriever = _ret.HybridRetriever()
+        snippets = retriever.search(issue, category_hint=category_hint, k=3)
+        retrieval_text = '\n'.join(f"- {s.text[:300]} (source: {Path(s.source).name})" for s in snippets)
+    except Exception:
+        pass
     
     try:
         # Generate ideas with high exploration
-        ideas = BrainstormEngine.generate_ideas(issue, n, creativity)
+        ideas = BrainstormEngine.generate_ideas(issue, n, creativity, category_hint=category_hint)
         
         # Log the brainstorming session
         _log_llm_run({
@@ -906,15 +1125,17 @@ def api_brainstorm():
                 'backend': CONFIG['llm_backend'],
                 'model': CONFIG['model']
             },
-            'ideas': [idea.to_dict() for idea in ideas]
+            'ideas': [idea.to_dict() for idea in ideas],
+            'classification': classification
         })
-        
+
         return jsonify({
             'ideas': [idea.to_dict() for idea in ideas],
             'meta': {
                 'count': len(ideas),
                 'creativity': creativity,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'category_hint': category_hint,
             }
         })
         
@@ -1101,22 +1322,25 @@ if __name__ == '__main__':
     except:
         local_ip = '127.0.0.1'
     
-    print(f"\n✓ Server starting on:")
-    print(f"  • http://localhost:{CONFIG['port']}")
-    print(f"  • http://{local_ip}:{CONFIG['port']}")
-    # Print all detected IPv4s
-    ips = SystemDiagnostics.ipv4_addresses()
-    if ips:
-        print("  • Local IPv4s:")
-        for ip in ips:
-            print(f"    - http://{ip}:{CONFIG['port']}")
+    print(f"\n✓ Server starting:")
+    bind = CONFIG['bind_host']
+    if bind == '0.0.0.0':
+        print(f"  • http://localhost:{CONFIG['port']}")
+        print(f"  • http://{local_ip}:{CONFIG['port']}")
+        ips = SystemDiagnostics.ipv4_addresses()
+        if ips:
+            print("  • Local IPv4s:")
+            for ip in ips:
+                print(f"    - http://{ip}:{CONFIG['port']}")
+    else:
+        print(f"  • http://{bind}:{CONFIG['port']}")
     print(f"\n✓ Safe mode: {CONFIG['safe_mode']}")
     print(f"✓ LLM backend: {CONFIG['llm_backend']}")
     print("\nPress Ctrl+C to stop\n")
     
     # Start server
     app.run(
-        host='0.0.0.0',  # Listen on all interfaces
+        host=CONFIG['bind_host'],  # Bind host
         port=CONFIG['port'],
         debug=False  # Set True for development
     )
