@@ -1,6 +1,6 @@
 {
   "profile_name": "msi-raider-linux-local",
-  "generated": "2025-09-08T16:10:09.675963",
+  "generated": "2025-09-08T21:44:23.411821",
   "hardware": {
     "cpu": {
       "architecture": "x86_64",
@@ -13,15 +13,15 @@
     "memory": {
       "total_mb": 29772,
       "total_gb": 29.1,
-      "available_mb": 23624,
-      "available_gb": 23.1
+      "available_mb": 22480,
+      "available_gb": 22.0
     },
     "storage": {
       "filesystem": "/dev/nvme0n1p8",
       "total": "240G",
-      "used": "52G",
-      "available": "176G",
-      "use_percent": "23%"
+      "used": "89G",
+      "available": "139G",
+      "use_percent": "39%"
     },
     "graphics": [
       {
@@ -52,6 +52,21 @@
         "installed": true,
         "path": "/usr/local/bin/ollama",
         "models": [
+          {
+            "name": "codellama:34b",
+            "id": "685be00e1532",
+            "size": "19"
+          },
+          {
+            "name": "gpt-oss:20b",
+            "id": "aa4295ac10c3",
+            "size": "13"
+          },
+          {
+            "name": "codellama:13b",
+            "id": "9f438cb9cd58",
+            "size": "7.4"
+          },
           {
             "name": "llama3:8b",
             "id": "365c0bd3c000",

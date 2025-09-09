@@ -16,9 +16,8 @@ from datetime import datetime
 try:
     import requests
 except ImportError:
-    print("Installing requests...")
-    subprocess.run([sys.executable, "-m", "pip", "install", "requests"])
-    import requests
+    print("Missing dependency 'requests'. Activate your venv (RN_VENV) and run: pip install requests")
+    sys.exit(1)
 
 class RoadNerdClient:
     def __init__(self, server_url: str = None):

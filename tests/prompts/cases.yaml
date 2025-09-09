@@ -1,0 +1,34 @@
+# Prompt suite cases for Phase 0
+# Each case can optionally provide expect_any regex patterns to check suggestion text.
+
+- id: wifi_basic
+  category: wifi
+  issue: "My WiFi is not working on this laptop."
+  expect_any:
+    - "NetworkManager"
+    - "nmcli"
+    - "rfkill"
+
+- id: dns_basic
+  category: dns
+  issue: "DNS resolution is failing on Ubuntu."
+  expect_any:
+    - "systemd-resolved"
+    - "resolv.conf"
+    - "dig|nslookup"
+
+- id: iface_up_no_net
+  category: network
+  issue: "Network interface shows as up but there is no internet access."
+  expect_any:
+    - "ip route"
+    - "gateway"
+    - "DNS"
+
+- id: system_slow
+  category: perf
+  issue: "System is running slow. What should I check?"
+  expect_any:
+    - "top|htop"
+    - "iostat|vmstat|free"
+    - "journalctl"
