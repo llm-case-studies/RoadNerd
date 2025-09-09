@@ -32,3 +32,19 @@
     - "top|htop"
     - "iostat|vmstat|free"
     - "journalctl"
+
+- id: ambiguous_inet
+  category: mixed
+  issue: "Internet is not working on my laptop."
+  expect_any:
+    - "nmcli"
+    - "ip route"
+    - "dig|nslookup"
+
+- id: ping_ok_browse_fail
+  category: dns
+  issue: "I can ping 1.1.1.1 but websites don't load."
+  expect_any:
+    - "dns"
+    - "resolv\.conf|systemd-resolved"
+    - "dig|nslookup"
