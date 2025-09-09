@@ -52,7 +52,7 @@ echo ""
 echo "Step 2: Setting up Python environment..."
 echo "-----------------------------------------"
 
-VENV_DIR="$HOME/.roadnerd_venv"
+VENV_DIR="${RN_VENV:-$HOME/.roadnerd_venv}"
 
 # Create virtual environment if it doesn't exist
 if [ ! -d "$VENV_DIR" ]; then
@@ -61,7 +61,15 @@ if [ ! -d "$VENV_DIR" ]; then
 fi
 
 # Activate virtual environment
-source "$VENV_DIR/bin/activate"
+if [ -d "$VENV_DIR" ]; then
+  # shellcheck disable=SC1090
+  source "$VENV_DIR/bin/activate"
+else
+  echo "Creating virtual environment at $VENV_DIR"
+  python3 -m venv "$VENV_DIR"
+  # shellcheck disable=SC1090
+  source "$VENV_DIR/bin/activate"
+fi
 
 # Upgrade pip
 pip install --upgrade pip
@@ -107,8 +115,14 @@ cat > "$HOME/roadnerd_server.sh" << 'EOF'
 #!/bin/bash
 # RoadNerd Server Launcher
 
-# Activate virtual environment
-source "$HOME/.roadnerd_venv/bin/activate"
+# Activate virtual environment (honor RN_VENV)
+VENV_DIR="${RN_VENV:-$HOME/.roadnerd_venv}"
+if [ -d "$VENV_DIR" ]; then
+  # shellcheck disable=SC1090
+  source "$VENV_DIR/bin/activate"
+else
+  echo "Warning: venv not found at $VENV_DIR; continuing without activation." >&2
+fi
 
 # Ensure Ollama is running
 if ! pgrep -x "ollama" > /dev/null; then
@@ -129,8 +143,14 @@ cat > "$HOME/roadnerd_client.sh" << 'EOF'
 #!/bin/bash
 # RoadNerd Client Launcher
 
-# Activate virtual environment
-source "$HOME/.roadnerd_venv/bin/activate"
+# Activate virtual environment (honor RN_VENV)
+VENV_DIR="${RN_VENV:-$HOME/.roadnerd_venv}"
+if [ -d "$VENV_DIR" ]; then
+  # shellcheck disable=SC1090
+  source "$VENV_DIR/bin/activate"
+else
+  echo "Warning: venv not found at $VENV_DIR; continuing without activation." >&2
+fi
 
 # Run the client
 python3 roadnerd_client.py "$@"
@@ -190,6 +210,105 @@ cat > "$ROADNERD_DIR/config.json" << EOF
 EOF
 
 echo "✓ Configuration saved to $ROADNERD_DIR/config.json"
+
+# Write artifacts manifest for cleanup
+ARTIFACTS_JSON="$ROADNERD_DIR/artifacts.json"
+cat > "$ARTIFACTS_JSON" << EOF
+{
+  "created_at": "$(date -Iseconds)",
+  "venv_path": "$VENV_DIR",
+  "files": [
+    "$HOME/roadnerd_server.sh",
+    "$HOME/roadnerd_client.sh",
+    "$HOME/enable_usb_tethering.sh",
+    "$ROADNERD_DIR/config.json"
+  ],
+  "logs_dir": "${RN_LOG_DIR:-$HOME/.roadnerd/logs}",
+  "attempted_apt": ["python3", "python3-venv", "python3-pip", "curl", "python3-flask", "python3-requests"],
+  "pip_packages": ["flask", "flask-cors", "requests"]
+}
+EOF
+
+echo "✓ Artifacts manifest: $ARTIFACTS_JSON"
+
+# Create cleanup script
+cat > "$HOME/roadnerd_cleanup.sh" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+ARTIFACTS="$HOME/roadnerd/artifacts.json"
+PURGE_MODELS=false
+PURGE_LOGS=false
+DRY_RUN=false
+
+usage(){
+  cat << USAGE
+RoadNerd Cleanup
+Usage: $0 [--purge-models] [--purge-logs] [--dry-run]
+USAGE
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    --purge-models) PURGE_MODELS=true ;;
+    --purge-logs) PURGE_LOGS=true ;;
+    --dry-run) DRY_RUN=true ;;
+    -h|--help) usage; exit 0 ;;
+  esac
+done
+
+py(){ python3 - "$@" << 'PY'
+import json, os, sys
+from pathlib import Path
+art = Path(os.environ.get('ARTIFACTS'))
+data = {}
+if art.exists():
+    data = json.loads(art.read_text())
+print(json.dumps(data))
+PY
+}
+
+DATA="$(py)"
+venv_path="$(printf '%s' "$DATA" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("venv_path",""))')"
+logs_dir="$(printf '%s' "$DATA" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("logs_dir",""))')"
+
+echo "Cleanup plan:"
+echo "  venv: $venv_path"
+echo "  logs_dir: $logs_dir (purge_logs=$PURGE_LOGS)"
+echo "  purge_models: $PURGE_MODELS"
+
+do_rm(){
+  local path="$1"
+  if [ -e "$path" ]; then
+    if [ "$DRY_RUN" = true ]; then echo "DRY: rm -rf $path"; else rm -rf "$path"; fi
+  fi
+}
+
+# Remove launchers and config
+for f in $(printf '%s' "$DATA" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("\n".join(d.get("files",[])))'); do
+  echo "Removing $f"; do_rm "$f";
+done
+
+# Remove venv
+if [ -n "$venv_path" ]; then echo "Removing venv $venv_path"; do_rm "$venv_path"; fi
+
+# Remove logs if requested
+if [ "$PURGE_LOGS" = true ] && [ -n "$logs_dir" ]; then echo "Purging logs $logs_dir"; do_rm "$logs_dir"; fi
+
+# Remove models if requested
+if [ "$PURGE_MODELS" = true ]; then
+  echo "Purging Ollama models (~/.ollama)"
+  if command -v ollama >/dev/null 2>&1; then
+    if [ "$DRY_RUN" = true ]; then echo "DRY: ollama rm -a"; else ollama rm -a || true; fi
+  fi
+  do_rm "$HOME/.ollama"
+fi
+
+echo "Cleanup complete."
+EOF
+
+chmod +x "$HOME/roadnerd_cleanup.sh"
+echo "✓ Cleanup script: $HOME/roadnerd_cleanup.sh"
 
 # Success message
 echo ""

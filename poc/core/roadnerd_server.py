@@ -6,6 +6,7 @@ Run this on your BeeLink or second laptop with LLM installed
 
 import json
 import sys
+from pathlib import Path
 import subprocess
 import platform
 import os
@@ -15,15 +16,14 @@ import socket
 import shutil
 from pathlib import Path
 
-# Try imports, fallback gracefully
+# Imports (do not auto-install; fail with guidance)
 try:
     from flask import Flask, request, jsonify, render_template_string, send_file, make_response
     from flask_cors import CORS
 except ImportError:
-    print("Installing required packages...")
-    subprocess.run([sys.executable, "-m", "pip", "install", "flask", "flask-cors"])
-    from flask import Flask, request, jsonify, render_template_string, send_file, make_response
-    from flask_cors import CORS
+    print("Missing dependencies for RoadNerd server: flask, flask-cors")
+    print("Activate your venv (RN_VENV) and run: pip install flask flask-cors")
+    sys.exit(1)
 
 app = Flask(__name__)
 CORS(app)  # Allow cross-origin requests
@@ -278,6 +278,26 @@ class CommandExecutor:
 
 # Flask Routes
 
+def _log_llm_run(record: Dict) -> None:
+    """Append a single JSON record to logs/llm_runs/YYYYMMDD.jsonl (best-effort)."""
+    try:
+        # Prefer RN_LOG_DIR if set; otherwise use repo-root logs directory
+        env_log_dir = os.getenv('RN_LOG_DIR')
+        if env_log_dir:
+            logs_dir = Path(env_log_dir)
+        else:
+            # Resolve repo root as .../RoadNerd from this file location
+            repo_root = Path(__file__).resolve().parents[2]
+            logs_dir = repo_root / 'logs' / 'llm_runs'
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        date = datetime.now().strftime('%Y%m%d')
+        out = logs_dir / f'{date}.jsonl'
+        with out.open('a') as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as _:
+        # Never break the API on logging errors
+        pass
+
 @app.route('/')
 def home():
     """Serve a simple web interface"""
@@ -347,6 +367,7 @@ def api_status():
         'system': {**SystemDiagnostics.get_system_info(), 'ips': SystemDiagnostics.ipv4_addresses()},
         'connectivity': SystemDiagnostics.check_connectivity(),
         'llm_backend': CONFIG['llm_backend'],
+        'model': CONFIG['model'],
         'safe_mode': CONFIG['safe_mode']
     })
 
@@ -526,14 +547,44 @@ def api_diagnose():
     """
     
     llm_response = LLMInterface.get_response(prompt)
-    
-    return jsonify({
+
+    response_payload = {
         'issue': issue,
         'kb_solution': kb_solution,
         'llm_suggestion': llm_response,
         'system_context': system_info,
         'connectivity': connectivity
-    })
+    }
+
+    # Phase 0 logging (legacy mode)
+    try:
+        incoming = data if isinstance(data, dict) else {}
+        _log_llm_run({
+            'mode': 'legacy',
+            'timestamp': datetime.now().isoformat(),
+            'client': {
+                'intent': incoming.get('intent'),
+                'intent_analysis': incoming.get('intent_analysis'),
+                'context_items': len(incoming.get('context', []) or [])
+            },
+            'issue_hash': str(hash(issue)) if issue else None,
+            'issue': issue,
+            'server': {
+                'backend': CONFIG['llm_backend'],
+                'model': CONFIG['model'],
+                'safe_mode': CONFIG['safe_mode']
+            },
+            'system': system_info,
+            'connectivity': connectivity,
+            'result': {
+                'has_kb': bool(kb_solution),
+                'llm_tokens_est': len((llm_response or '').split()),
+            }
+        })
+    except Exception:
+        pass
+
+    return jsonify(response_payload)
 
 @app.route('/api/execute', methods=['POST'])
 def api_execute():
