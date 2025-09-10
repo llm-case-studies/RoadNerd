@@ -59,15 +59,29 @@ class InputDetector:
 
 
 class CategoryClassifier:
-    CATEGORIES = ['wifi', 'dns', 'network', 'performance', 'system']
+    CATEGORIES = [
+        'power',        # Battery, charger, won't turn on, power button
+        'boot',         # BIOS, bootloader, OS startup, won't start
+        'hardware',     # RAM, storage, motherboard, physical damage
+        'physical',     # Dropped, liquid damage, environmental issues
+        'software',     # Drivers, applications, OS corruption, crashes
+        'user',         # Wrong expectations, user error, wrong device
+        'network',      # WiFi, ethernet, internet connectivity, DNS
+        'performance',  # Slow, overheating, resource issues
+        'system'        # General system configuration issues
+    ]
 
     # Simple heuristics
     HEUR_PATTERNS: Dict[str, List[re.Pattern]] = {
-        'wifi': [re.compile(p, re.I) for p in [r"wifi|wlan|ssid|iwlwifi|rfkill|wireless|nmcli"]],
-        'dns': [re.compile(p, re.I) for p in [r"dns|resolv\.conf|systemd-resolved|nslookup|dig"]],
-        'network': [re.compile(p, re.I) for p in [r"ip\s+addr|ip\s+route|gateway|interface|ethernet|link state"]],
-        'performance': [re.compile(p, re.I) for p in [r"slow|high cpu|memory|swap|load|iowait"]],
-        'system': [re.compile(p, re.I) for p in [r"kernel|dmesg|journalctl|os-release|packages|driver"]],
+        'power': [re.compile(p, re.I) for p in [r"battery|charger|power|turn on|won't start|dead|plug|charge|power button|no lights|black screen"]],
+        'boot': [re.compile(p, re.I) for p in [r"boot|bios|grub|startup|won't start|blue screen|kernel panic|post|loading"]],
+        'hardware': [re.compile(p, re.I) for p in [r"ram|memory|disk|drive|motherboard|cpu|fan|temperature|beep|clicking|hardware"]],
+        'physical': [re.compile(p, re.I) for p in [r"dropped|spill|liquid|water|coffee|damage|cracked|broken|truck|physical"]],
+        'software': [re.compile(p, re.I) for p in [r"driver|application|program|crash|freeze|virus|malware|update|install|corrupt"]],
+        'user': [re.compile(p, re.I) for p in [r"how to|don't know|confused|wrong|not mine|toy|fake|expected|should|supposed"]],
+        'network': [re.compile(p, re.I) for p in [r"wifi|wlan|internet|network|connection|dns|ip\s+addr|ethernet|gateway|ssid"]],
+        'performance': [re.compile(p, re.I) for p in [r"slow|lag|freeze|hang|high cpu|memory|swap|load|iowait|overheat"]],
+        'system': [re.compile(p, re.I) for p in [r"kernel|dmesg|journalctl|os-release|packages|configuration|settings"]],
     }
 
     def __init__(self) -> None:

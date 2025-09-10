@@ -16,7 +16,7 @@ Relevant notes:
 {{/RETRIEVAL}}
 
 Generate {{N}} distinct diagnostic hypotheses. For each, provide JSON:
-{"hypothesis": "...", "category": "wifi|dns|network|performance|system", "why": "...", "checks": ["..."], "fixes": ["..."], "risk": "low|medium|high"}
+{"hypothesis": "...", "category": "power|boot|hardware|physical|software|user|network|performance|system", "why": "...", "checks": ["..."], "fixes": ["..."], "risk": "low|medium|high"}
 
 Only output JSON objects or a JSON array. No prose outside JSON.
 
