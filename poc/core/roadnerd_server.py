@@ -429,10 +429,12 @@ class BrainstormEngine:
         prompt = _render_template(tpl, ctx)
 
         # Get LLM response with per-request creativity
+        # Each JSON idea ~100-200 tokens, so scale appropriately
+        num_predict = max(512, n * 120)  # At least 120 tokens per idea
         llm_response = LLMInterface.get_response(
             prompt,
             temperature=temperature,
-            num_predict=256 if n > 5 else 128,
+            num_predict=num_predict,
         )
         ideas = BrainstormEngine._parse_ideas_response(llm_response, issue)
         
@@ -495,7 +497,20 @@ class BrainstormEngine:
                 except Exception:
                     continue
 
-        # 3) Curly-brace balanced objects found in text
+        # 3) Parse numbered JSON list format (1. {...}, 2. {...})
+        if not ideas:
+            import re
+            # Match numbered items with JSON objects
+            numbered_pattern = re.compile(r'^\d+\.\s*(\{.*?\})', re.MULTILINE | re.DOTALL)
+            for match in numbered_pattern.findall(text):
+                try:
+                    obj = json.loads(match)
+                    if isinstance(obj, dict):
+                        ideas.append(to_idea(obj))
+                except Exception:
+                    continue
+
+        # 4) Curly-brace balanced objects found in text
         if not ideas:
             buf = []
             depth = 0
@@ -516,7 +531,7 @@ class BrainstormEngine:
                         except Exception:
                             continue
 
-        # 4) Fallback
+        # 5) Fallback
         if not ideas:
             ideas.append(Idea(
                 hypothesis="Generic troubleshooting approach",
@@ -1082,6 +1097,7 @@ def api_brainstorm():
     n = data.get('n', 5)  # Number of ideas to generate
     creativity = data.get('creativity', 2)  # 0-3 scale
     category_hint = data.get('category_hint')
+    debug = data.get('debug', False)  # Include diagnostic info
 
     # If no category_hint provided, attempt classification
     classification = None
@@ -1129,7 +1145,7 @@ def api_brainstorm():
             'classification': classification
         })
 
-        return jsonify({
+        response = {
             'ideas': [idea.to_dict() for idea in ideas],
             'meta': {
                 'count': len(ideas),
@@ -1137,7 +1153,42 @@ def api_brainstorm():
                 'timestamp': datetime.now().isoformat(),
                 'category_hint': category_hint,
             }
-        })
+        }
+        
+        # Add debug information if requested
+        if debug:
+            response['debug'] = {
+                'steps': {
+                    '1_classification': {
+                        'method': 'automatic' if not data.get('category_hint') else 'provided',
+                        'result': classification,
+                        'confidence_level': 'high' if classification and classification.get('confidence', 0) > 0.7 else 'medium' if classification and classification.get('confidence', 0) > 0.4 else 'low',
+                        'ambiguous': classification and classification.get('confidence', 0) < 0.6 if classification else False
+                    },
+                    '2_retrieval': {
+                        'snippets_found': len(retrieval_text.splitlines()) if retrieval_text else 0,
+                        'used_category': category_hint
+                    },
+                    '3_brainstorming': {
+                        'template_used': f"brainstorm.{category_hint}.txt" if category_hint else "brainstorm.base.txt",
+                        'model': CONFIG['model'],
+                        'num_predict': max(512, n * 120),
+                        'temperature': {0: 0.0, 1: 0.3, 2: 0.7, 3: 1.0}.get(creativity, 0.3),
+                        'parsing_success': len(ideas) > 0 and ideas[0].hypothesis != "Generic troubleshooting approach"
+                    }
+                },
+                'recommendations': []
+            }
+            
+            # Add recommendations based on analysis
+            if classification and classification.get('confidence', 0) < 0.5:
+                response['debug']['recommendations'].append("Low classification confidence - consider manual category override or disambiguation flow")
+            if not retrieval_text:
+                response['debug']['recommendations'].append("No retrieval context found - responses may be less grounded")
+            if not response['debug']['steps']['3_brainstorming']['parsing_success']:
+                response['debug']['recommendations'].append("JSON parsing failed - check model output format")
+            
+        return jsonify(response)
         
     except Exception as e:
         return jsonify({'error': f'Brainstorming failed: {str(e)}'}), 500
