@@ -190,7 +190,7 @@ import uuid
 
 
 # =====================================================================
-# UI & FRONTEND ROUTES
+# UI/FRONTEND ROUTES
 # =====================================================================
 
 @app.route('/')
@@ -248,6 +248,363 @@ def home():
                 document.getElementById('conn').innerHTML = html;
               });
         </script>
+    </body>
+    </html>
+    '''
+    return render_template_string(html)
+
+@app.route('/api-docs', methods=['GET'])
+def api_docs():
+    """Lightweight API console for browser testing"""
+    html = '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>RoadNerd API Console</title>
+      <style>
+        body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background: #0b1220; color: #e0e6f0; }
+        h1, h2 { margin: 0 0 10px; }
+        section { background: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        textarea, input { width: 100%; background: #0b1220; color: #e0e6f0; border: 1px solid #374151; border-radius: 6px; padding: 8px; }
+        button { background: #2563eb; color: white; border: 0; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+        pre { background: #0b1220; padding: 12px; border-radius: 6px; overflow: auto; max-height: 320px; }
+        label { display: block; margin: 6px 0; }
+      </style>
+    </head>
+    <body>
+      <h1>RoadNerd API Console</h1>
+      <section>
+        <h2>Token (optional)</h2>
+        <label>Authorization: Bearer <input id="token" placeholder="token for gated endpoints"/></label>
+      </section>
+      <section>
+        <h2>GET /api/status</h2>
+        <button onclick="callStatus()">Call</button>
+        <pre id="statusOut"></pre>
+      </section>
+      <section>
+        <h2>POST /api/diagnose</h2>
+        <label>Issue</label>
+        <textarea id="issue" rows="4">My WiFi is not working</textarea>
+        <label><input id="diagDebug" type="checkbox"/> Debug</label>
+        <button onclick="callDiagnose()">Diagnose</button>
+        <pre id="diagOut"></pre>
+      </section>
+      <section>
+        <h2>POST /api/execute</h2>
+        <label>Command</label>
+        <input id="cmd" value="whoami"/>
+        <label><input id="force" type="checkbox"/> Force (override safe mode)</label>
+        <button onclick="callExecute()">Execute</button>
+        <pre id="execOut"></pre>
+      </section>
+      <section>
+        <h2>POST /api/ideas/brainstorm</h2>
+        <label>Issue</label>
+        <textarea id="issueIdeas" rows="3">DNS resolution is failing on Ubuntu.</textarea>
+        <label>N ideas</label>
+        <input id="nIdeas" value="5"/>
+        <label>Creativity (0-3)</label>
+        <input id="creativity" value="2"/>
+        <label><input id="brainDebug" type="checkbox"/> Debug</label>
+        <button onclick="callBrainstorm()">Brainstorm</button>
+        <pre id="brainOut"></pre>
+      </section>
+      <section>
+        <h2>POST /api/ideas/probe</h2>
+        <label>Ideas JSON (array)</label>
+        <textarea id="ideasJSON" rows="5">[{"hypothesis":"DNS misconfiguration","category":"dns","why":"resolv.conf wrong","checks":["cat /etc/resolv.conf","dig example.com"]}]</textarea>
+        <label><input id="runChecks" type="checkbox" checked/> Run checks</label>
+        <button onclick="callProbe()">Probe</button>
+        <pre id="probeOut"></pre>
+      </section>
+      <section>
+        <h2>POST /api/ideas/judge</h2>
+        <label>Issue</label>
+        <input id="issueJudge" value="DNS resolution is failing"/>
+        <label>Ideas JSON (array)</label>
+        <textarea id="ideasJudge" rows="5">[{"hypothesis":"DNS misconfiguration","category":"dns","why":"resolv.conf wrong","checks":["cat /etc/resolv.conf"],"fixes":["sudo systemctl restart systemd-resolved"],"risk":"low"}]</textarea>
+        <button onclick="callJudge()">Judge</button>
+        <pre id="judgeOut"></pre>
+      </section>
+      <section>
+        <h2>POST /api/llm</h2>
+        <label>Prompt</label>
+        <textarea id="prompt" rows="3">What version of Ubuntu am I running?</textarea>
+        <button onclick="callLLM()">Ask</button>
+        <pre id="llmOut"></pre>
+      </section>
+      <section>
+        <h2>Standard Profiling Suite</h2>
+        <button onclick="loadTestPresets()">📋 Load Test Issue Presets</button>
+        <button onclick="runStandardProfile()" style="background: #059669; margin-left: 10px;">🧪 Run Standard Profile</button>
+        <br><br>
+        <label>Test Categories:</label>
+        <select id="presetCategory" onchange="loadCategoryIssues()" style="width: 200px; margin: 5px;">
+          <option value="">Select category...</option>
+          <option value="hardware">Hardware Issues</option>
+          <option value="network">Network Issues</option>
+          <option value="system">System Issues</option>
+          <option value="stress_tests">Stress Tests</option>
+        </select>
+        <br>
+        <label>Select Test Issue:</label>
+        <select id="presetIssue" onchange="usePresetIssue()" style="width: 100%; margin: 5px 0;">
+          <option value="">Choose an issue to auto-fill...</option>
+        </select>
+        <pre id="presetOut">Standard profiling will test N-idea generation across multiple models with predefined diagnostic scenarios</pre>
+      </section>
+      <section>
+        <h2>Model Switching</h2>
+        <button onclick="getModel()">🔄 List Available Models</button>
+        <br><br>
+        <label>Select Model:</label>
+        <select id="modelSelect" style="width: 300px; margin: 5px 0;">
+          <option value="">Loading models...</option>
+        </select>
+        <br>
+        <label>Or enter manually:</label>
+        <input id="newModel" placeholder="e.g., llama3.2:3b or gpt-oss:20b" style="width: 300px;"/>
+        <br><br>
+        <button onclick="setModel()" style="background: #007acc; color: white; padding: 8px 16px;">🔄 Switch Model</button>
+        <pre id="modelOut">Click "List Available Models" to see all models</pre>
+      </section>
+      <script>
+        function j(o){ return JSON.stringify(o, null, 2); }
+        function headers(){
+          const t = document.getElementById('token').value.trim();
+          const h = {'Content-Type':'application/json'};
+          if (t) h['Authorization'] = 'Bearer ' + t;
+          return h;
+        }
+        async function callStatus(){
+          const r = await fetch('/api/status');
+          document.getElementById('statusOut').textContent = j(await r.json());
+        }
+        async function callDiagnose(){
+          const body = {issue: document.getElementById('issue').value};
+          if (document.getElementById('diagDebug').checked) body.debug = true;
+          const r = await fetch('/api/diagnose', {method:'POST', headers: headers(), body: JSON.stringify(body)});
+          document.getElementById('diagOut').textContent = j(await r.json());
+        }
+        async function callExecute(){
+          const r = await fetch('/api/execute', {method:'POST', headers: headers(), body: JSON.stringify({command: document.getElementById('cmd').value, force: document.getElementById('force').checked})});
+          document.getElementById('execOut').textContent = j(await r.json());
+        }
+        async function callBrainstorm(){
+          showProgress('brainOut', '🧠 Generating ideas... (may take 15-30s for larger models)');
+          const body = {issue: document.getElementById('issueIdeas').value, n: parseInt(document.getElementById('nIdeas').value||'5'), creativity: parseInt(document.getElementById('creativity').value||'2')};
+          if (document.getElementById('brainDebug').checked) body.debug = true;
+          const r = await fetch('/api/ideas/brainstorm', {method:'POST', headers: headers(), body: JSON.stringify(body)});
+          document.getElementById('brainOut').textContent = j(await r.json());
+        }
+        async function callProbe(){
+          const ideas = JSON.parse(document.getElementById('ideasJSON').value || '[]');
+          const body = {ideas: ideas, run_checks: document.getElementById('runChecks').checked};
+          const r = await fetch('/api/ideas/probe', {method:'POST', headers: headers(), body: JSON.stringify(body)});
+          document.getElementById('probeOut').textContent = j(await r.json());
+        }
+        async function callJudge(){
+          const ideas = JSON.parse(document.getElementById('ideasJudge').value || '[]');
+          const body = {issue: document.getElementById('issueJudge').value, ideas: ideas};
+          const r = await fetch('/api/ideas/judge', {method:'POST', headers: headers(), body: JSON.stringify(body)});
+          document.getElementById('judgeOut').textContent = j(await r.json());
+        }
+        async function callLLM(){
+          showProgress('llmOut', '🧠 LLM processing...');
+          const r = await fetch('/api/llm', {method:'POST', headers: headers(), body: JSON.stringify({prompt: document.getElementById('prompt').value})});
+          document.getElementById('llmOut').textContent = j(await r.json());
+        }
+        async function getModel(){
+          document.getElementById('modelOut').textContent = '🔄 Loading available models...';
+          const r = await fetch('/api/model/list', {headers: headers()});
+          const data = await r.json();
+          document.getElementById('modelOut').textContent = j(data);
+          
+          // Auto-populate dropdown if models available
+          if (data.available_models) {
+            const select = document.getElementById('modelSelect');
+            if (select) {
+              select.innerHTML = '<option value="">Choose model...</option>';
+              data.available_models.forEach(m => {
+                const option = document.createElement('option');
+                option.value = m.name;
+                option.textContent = `${m.name} (${m.size})${m.current ? ' [CURRENT]' : ''}`;
+                option.selected = m.current;
+                select.appendChild(option);
+              });
+            }
+          }
+        }
+        async function setModel(){
+          const m = document.getElementById('newModel').value || document.getElementById('modelSelect')?.value;
+          if (!m) {
+            document.getElementById('modelOut').textContent = 'Please enter or select a model name';
+            return;
+          }
+          
+          document.getElementById('modelOut').textContent = `🔄 Switching to ${m}... (testing model)`;
+          const r = await fetch('/api/model/switch', {method:'POST', headers: headers(), body: JSON.stringify({model: m})});
+          const data = await r.json();
+          document.getElementById('modelOut').textContent = j(data);
+          
+          // Refresh model list if successful
+          if (data.success) {
+            setTimeout(getModel, 500);
+          }
+        }
+        
+        // Add progress indicators for LLM calls
+        function showProgress(elementId, message = '🧠 LLM thinking...') {
+          document.getElementById(elementId).textContent = message;
+        }
+        
+        // Standard Profiling Functions
+        let testPresets = {};
+        
+        async function loadTestPresets() {
+          try {
+            const r = await fetch('/api/test-presets');
+            testPresets = await r.json();
+            document.getElementById('presetOut').textContent = 'Test presets loaded! Select a category to see available issues.';
+          } catch (e) {
+            document.getElementById('presetOut').textContent = 'Error loading presets: ' + e.message;
+          }
+        }
+        
+        function loadCategoryIssues() {
+          const category = document.getElementById('presetCategory').value;
+          const select = document.getElementById('presetIssue');
+          select.innerHTML = '<option value="">Choose an issue to auto-fill...</option>';
+          
+          if (category && testPresets[category]) {
+            testPresets[category].forEach(issue => {
+              const option = document.createElement('option');
+              option.value = issue;
+              option.textContent = issue;
+              select.appendChild(option);
+            });
+          }
+        }
+        
+        function usePresetIssue() {
+          const issue = document.getElementById('presetIssue').value;
+          if (issue) {
+            document.getElementById('issueIdeas').value = issue;
+            document.getElementById('presetOut').textContent = `Selected: "${issue}" - Ready to test brainstorming!`;
+          }
+        }
+        
+        async function runStandardProfile() {
+          document.getElementById('presetOut').textContent = '🧪 Running 5-idea stress test on current model... (may take 15-30s)';
+          
+          try {
+            const r = await fetch('/api/profile/standard', {method: 'POST', headers: headers()});
+            const data = await r.json();
+            
+            if (data.error) {
+              document.getElementById('presetOut').textContent = 'Error: ' + data.error;
+              return;
+            }
+            
+            const analysis = data.analysis;
+            const metrics = data.performance_metrics;
+            let output = `STANDARD PROFILE RESULTS\\n\\n`;
+            output += `Model: ${data.model}\\n`;
+            output += `Test: "${data.test_issue}"\\n\\n`;
+            
+            // Performance metrics
+            output += `PERFORMANCE METRICS:\\n`;
+            output += `• Response Time: ${metrics.response_time_sec}s\\n`;
+            output += `• Tokens/Second: ${metrics.tokens_per_second} (${analysis.speed_rating})\\n`;
+            output += `• Estimated Tokens: ${metrics.estimated_tokens}\\n`;
+            output += `• CPU Usage: ${metrics.cpu_usage_percent}%\\n`;
+            output += `• RAM Usage: ${metrics.ram_usage_percent}% (${metrics.ram_used_gb}GB)\\n`;
+            output += `• Model Size: ${metrics.model_size_disk_gb}GB on disk\\n\\n`;
+            
+            // Quality analysis
+            output += `QUALITY ANALYSIS:\\n`;
+            output += `• Ideas Generated: ${analysis.ideas_generated}/5\\n`;
+            output += `• Success: ${analysis.success ? '✅ PASS' : '❌ FAIL'}\\n`;
+            output += `• N-Idea Generation: ${analysis.n_idea_generation_success ? '✅ PASS' : '❌ FAIL'}\\n`;
+            output += `• Model Size Category: ${analysis.model_size_category}\\n`;
+            output += `• Performance Tier: ${analysis.performance_tier.toUpperCase()}\\n`;
+            output += `• Production Ready: ${analysis.production_ready ? '✅ YES' : '❌ NO'}\\n\\n`;
+            
+            // Show actual ideas if available
+            if (data.result && data.result.ideas) {
+              output += `IDEAS GENERATED:\\n`;
+              data.result.ideas.forEach((idea, i) => {
+                output += `${i+1}. ${idea.hypothesis} (${idea.category})\\n`;
+              });
+            }
+            
+            output += `\\n💡 Use model switching above to test different models with this same stress test!`;
+            
+            document.getElementById('presetOut').textContent = output;
+            
+          } catch (e) {
+            document.getElementById('presetOut').textContent = 'Error: ' + e.message;
+          }
+        }
+      </script>
+    </body>
+    </html>
+    '''
+    return render_template_string(html)
+
+@app.route('/logs', methods=['GET'])
+def logs_view():
+    """Simple browser viewer for JSONL logs with filters."""
+    html = '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>RoadNerd Logs</title>
+      <style>
+        body { font-family: system-ui, sans-serif; background: #0b1220; color: #e0e6f0; padding: 20px; }
+        header { margin-bottom: 12px; }
+        select, input { background: #111827; color: #e0e6f0; border: 1px solid #374151; border-radius: 6px; padding: 6px; }
+        button { background: #2563eb; color: white; border: 0; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+        pre { background: #0b1220; border: 1px solid #1f2937; border-radius: 8px; padding: 10px; max-height: 60vh; overflow: auto; }
+        .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      </style>
+    </head>
+    <body>
+      <h1>RoadNerd Logs</h1>
+      <div class="row">
+        <label>Date <input id="date" placeholder="YYYYMMDD (optional)"/></label>
+        <label>Mode
+          <select id="mode">
+            <option value="">(any)</option>
+            <option>legacy</option>
+            <option>prompt_suite</option>
+            <option>brainstorm</option>
+            <option>probe</option>
+            <option>judge</option>
+            <option>disambiguation</option>
+          </select>
+        </label>
+        <label>Limit <input id="limit" value="200" size="4"/></label>
+        <button onclick="loadLogs()">Load</button>
+      </div>
+      <pre id="out">(no data)</pre>
+      <script>
+        function j(o){ return JSON.stringify(o, null, 2); }
+        async function loadLogs(){
+          const d = document.getElementById('date').value.trim();
+          const m = document.getElementById('mode').value;
+          const l = document.getElementById('limit').value;
+          const qs = new URLSearchParams();
+          if (d) qs.set('date', d);
+          if (m) qs.set('mode', m);
+          if (l) qs.set('limit', l);
+          const r = await fetch('/api/logs?' + qs.toString());
+          const data = await r.json();
+          document.getElementById('out').textContent = j(data);
+        }
+        loadLogs();
+      </script>
     </body>
     </html>
     '''
@@ -335,11 +692,6 @@ def api_model_list():
             return jsonify({'error': 'Could not connect to Ollama'}), 500
     except Exception as e:
         return jsonify({'error': f'Ollama error: {str(e)}'}), 500
-
-
-# =====================================================================
-# TESTING & PROFILING ROUTES
-# =====================================================================
 
 @app.route('/api/profile/standard', methods=['POST'])
 def api_profile_standard():
@@ -504,11 +856,6 @@ def api_test_presets():
     
     return jsonify(presets)
 
-
-# =====================================================================
-# LOGGING & MONITORING ROUTES
-# =====================================================================
-
 @app.route('/api/logs', methods=['GET'])
 def api_logs():
     """Return JSONL logs for a given date with optional filtering."""
@@ -612,11 +959,6 @@ def logs_view():
     </html>
     '''
     return render_template_string(html)
-
-
-# =====================================================================
-# SYSTEM & DIAGNOSTICS ROUTES  
-# =====================================================================
 
 @app.route('/api/status', methods=['GET'])
 def api_status():
@@ -931,11 +1273,6 @@ def api_docs():
     '''
     return render_template_string(html)
 
-
-# =====================================================================
-# DOWNLOAD & BOOTSTRAP ROUTES
-# =====================================================================
-
 @app.route('/download/client.py', methods=['GET'])
 def download_client():
     """Serve client file for patient bootstrap"""
@@ -1138,11 +1475,6 @@ def api_execute():
     
     return jsonify(result)
 
-
-# =====================================================================
-# LLM DIRECT QUERY ROUTES
-# =====================================================================
-
 @app.route('/api/llm', methods=['POST'])
 def api_llm():
     """Direct LLM query"""
@@ -1217,9 +1549,7 @@ def api_scan_network():
     return jsonify(diagnostics)
 
 
-# =====================================================================
-# IDEAS & BRAINSTORM SYSTEM ROUTES (BACKLOG++)
-# =====================================================================
+# BACKLOG++ API Endpoints
 
 @app.route('/api/ideas/brainstorm', methods=['POST'])
 def api_brainstorm():
@@ -1456,10 +1786,6 @@ def api_probe():
     except Exception as e:
         return jsonify({'error': f'Probing failed: {str(e)}'}), 500
 
-
-# =====================================================================
-# SERVER STARTUP & UTILITY FUNCTIONS
-# =====================================================================
 
 def print_connection_guidance():
     """Show connection guidance for direct Ethernet setups"""
