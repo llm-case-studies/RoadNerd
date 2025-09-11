@@ -1,6 +1,6 @@
 {
   "profile_name": "msi-raider-linux-local",
-  "generated": "2025-09-08T21:44:23.411821",
+  "generated": "2025-09-10T20:53:58.590498",
   "hardware": {
     "cpu": {
       "architecture": "x86_64",
@@ -13,15 +13,15 @@
     "memory": {
       "total_mb": 29772,
       "total_gb": 29.1,
-      "available_mb": 22480,
-      "available_gb": 22.0
+      "available_mb": 22010,
+      "available_gb": 21.5
     },
     "storage": {
       "filesystem": "/dev/nvme0n1p8",
       "total": "240G",
       "used": "89G",
       "available": "139G",
-      "use_percent": "39%"
+      "use_percent": "40%"
     },
     "graphics": [
       {
@@ -141,5 +141,59 @@
   },
   "llm_benchmarks": {},
   "performance_recommendations": {},
-  "common_issues": []
+  "common_issues": [],
+  "roadnerd_workflow_tests": {
+    "gpt-oss:20b": {
+      "model": "gpt-oss:20b",
+      "timestamp": "2025-09-10T20:54:35.762493",
+      "workflow_tests": [
+        {
+          "test_name": "basic_diagnose",
+          "success": false,
+          "response_time": 0.0011796951293945312,
+          "error": "HTTPConnectionPool(host='localhost', port=8081): Max retries exceeded with url: /api/diagnose (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x75757b7ad280>: Failed to establish a new connection: [Errno 111] Connection refused'))"
+        },
+        {
+          "test_name": "single_idea_brainstorm",
+          "success": false,
+          "response_time": 0.00034236907958984375,
+          "error": "HTTPConnectionPool(host='localhost', port=8081): Max retries exceeded with url: /api/ideas/brainstorm (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x75757b690e90>: Failed to establish a new connection: [Errno 111] Connection refused'))"
+        },
+        {
+          "test_name": "multi_idea_brainstorm_stress",
+          "success": false,
+          "response_time": 0.00038504600524902344,
+          "error": "HTTPConnectionPool(host='localhost', port=8081): Max retries exceeded with url: /api/ideas/brainstorm (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x75757b691550>: Failed to establish a new connection: [Errno 111] Connection refused'))"
+        },
+        {
+          "test_name": "creative_brainstorm",
+          "success": false,
+          "response_time": 0.0003619194030761719,
+          "error": "HTTPConnectionPool(host='localhost', port=8081): Max retries exceeded with url: /api/ideas/brainstorm (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x75757b691c40>: Failed to establish a new connection: [Errno 111] Connection refused'))"
+        },
+        {
+          "test_name": "probe_safety",
+          "success": false,
+          "response_time": 0.0003724098205566406,
+          "error": "HTTPConnectionPool(host='localhost', port=8081): Max retries exceeded with url: /api/ideas/probe (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x75757b663440>: Failed to establish a new connection: [Errno 111] Connection refused'))"
+        },
+        {
+          "test_name": "judge_ranking",
+          "success": false,
+          "response_time": 0.00028634071350097656,
+          "error": "HTTPConnectionPool(host='localhost', port=8081): Max retries exceeded with url: /api/ideas/judge (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x75757b691af0>: Failed to establish a new connection: [Errno 111] Connection refused'))"
+        }
+      ],
+      "summary": {
+        "success_rate": 0.0,
+        "avg_response_time": 0,
+        "total_tests": 6,
+        "successful_tests": 0,
+        "json_parse_failures": 0,
+        "n_idea_generation_success": false,
+        "model_size_category": "xlarge",
+        "recommended_for_production": false
+      }
+    }
+  }
 }

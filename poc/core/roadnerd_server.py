@@ -186,25 +186,62 @@ class LLMInterface:
     
     @staticmethod
     def query_ollama(prompt: str, options_overrides: Optional[Dict] = None) -> str:
-        """Query Ollama API"""
+        """Query Ollama API - automatically selects chat vs generate based on model"""
         try:
             import requests
             base = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
-            # Defaults from environment
-            options = {
-                'temperature': float(os.getenv('RN_TEMP', '0')),
-                'num_predict': int(os.getenv('RN_NUM_PREDICT', '128')),
-            }
+            
+            # Check if we should use chat mode (auto-detect GPT-OSS models or force via env)
+            use_chat_mode = os.getenv('RN_USE_CHAT_MODE', 'auto').lower()
+            force_chat = (use_chat_mode == 'force') or (use_chat_mode == 'auto' and CONFIG['model'].startswith('gpt-oss'))
+            
+            # Defaults from environment with GPT-OSS specific settings
+            if force_chat:
+                # GPT-OSS needs temperature=1.0, top_p=1.0 by default
+                options = {
+                    'temperature': float(os.getenv('RN_TEMP', '1.0')),
+                    'top_p': float(os.getenv('RN_TOP_P', '1.0')),
+                    'num_predict': int(os.getenv('RN_NUM_PREDICT', '128')),
+                    'num_ctx': int(os.getenv('RN_NUM_CTX', '2048')),
+                }
+            else:
+                # Standard models use previous defaults
+                options = {
+                    'temperature': float(os.getenv('RN_TEMP', '0')),
+                    'num_predict': int(os.getenv('RN_NUM_PREDICT', '128')),
+                    'num_ctx': int(os.getenv('RN_NUM_CTX', '2048')),
+                }
+            
             if options_overrides:
                 options.update({k: v for k, v in options_overrides.items() if v is not None})
-            payload = {
-                'model': CONFIG['model'],
-                'prompt': prompt,
-                'stream': False,
-                'options': options,
-            }
-            response = requests.post(f'{base}/api/generate', json=payload)
-            return response.json().get('response', 'No response from Ollama')
+            
+            if force_chat:
+                # Use chat API for GPT-OSS models
+                payload = {
+                    'model': CONFIG['model'],
+                    'messages': [
+                        {'role': 'system', 'content': 'You are a helpful diagnostic assistant.'},
+                        {'role': 'user', 'content': prompt}
+                    ],
+                    'stream': False,
+                    'options': options,
+                }
+                response = requests.post(f'{base}/api/chat', json=payload)
+                result = response.json()
+                if 'message' in result and 'content' in result['message']:
+                    return result['message']['content']
+                else:
+                    return result.get('response', 'No response from Ollama chat API')
+            else:
+                # Use generate API for standard models
+                payload = {
+                    'model': CONFIG['model'],
+                    'prompt': prompt,
+                    'stream': False,
+                    'options': options,
+                }
+                response = requests.post(f'{base}/api/generate', json=payload)
+                return response.json().get('response', 'No response from Ollama')
         except Exception as e:
             return f"Ollama not available: {e}"
     
@@ -222,7 +259,7 @@ class LLMInterface:
     @staticmethod
     def get_response(prompt: str, *, temperature: Optional[float] = None, num_predict: Optional[int] = None, top_p: Optional[float] = None) -> str:
         """Get response from configured LLM with optional per-request options."""
-        overrides = {'temperature': temperature, 'num_predict': num_predict}
+        overrides = {'temperature': temperature, 'num_predict': num_predict, 'top_p': top_p}
         if CONFIG['llm_backend'] == 'ollama':
             return LLMInterface.query_ollama(prompt, options_overrides=overrides)
         elif CONFIG['llm_backend'] == 'llamafile':
@@ -371,6 +408,18 @@ def _log_llm_run(record: Dict) -> None:
         # Never break the API on logging errors
         pass
 
+def _logs_dir() -> Path:
+    """Resolve the logs directory honoring RN_LOG_DIR, else repo logs/llm_runs."""
+    env_log_dir = os.getenv('RN_LOG_DIR')
+    if env_log_dir:
+        d = Path(env_log_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    repo_root = Path(__file__).resolve().parents[2]
+    d = repo_root / 'logs' / 'llm_runs'
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
 
 # BACKLOG++ Implementation: Brainstorm/Judge System
 import uuid
@@ -407,7 +456,7 @@ class BrainstormEngine:
     """Generate multiple structured ideas for a given issue."""
     
     @staticmethod
-    def generate_ideas(issue: str, n: int = 5, creativity: int = 1, category_hint: Optional[str] = None) -> List[Idea]:
+    def generate_ideas(issue: str, n: int = 5, creativity: int = 1, category_hint: Optional[str] = None, retrieval_text: str = "") -> List[Idea]:
         """Generate N ideas with specified creativity level (0-3)."""
         
         # Adjust LLM parameters based on creativity
@@ -424,7 +473,7 @@ class BrainstormEngine:
             'ISSUE': issue,
             'CATEGORY_HINT': category_hint or '',
             'N': str(n),
-            'RETRIEVAL': '',
+            'RETRIEVAL': retrieval_text or '',
         }
         prompt = _render_template(tpl, ctx)
 
@@ -706,6 +755,348 @@ def home():
     '''
     return render_template_string(html)
 
+@app.route('/api/model/switch', methods=['POST'])
+def api_model_switch():
+    """Switch to a different model"""
+    data = request.get_json() or {}
+    new_model = data.get('model')
+    
+    if not new_model:
+        return jsonify({'error': 'Model name required'}), 400
+    
+    # Verify model exists in Ollama
+    try:
+        import requests
+        base = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+        response = requests.get(f'{base}/api/tags')
+        if response.status_code == 200:
+            available_models = [m['name'] for m in response.json().get('models', [])]
+            if new_model not in available_models:
+                return jsonify({
+                    'error': f'Model {new_model} not found',
+                    'available_models': available_models
+                }), 400
+        else:
+            return jsonify({'error': 'Could not connect to Ollama'}), 500
+    except Exception as e:
+        return jsonify({'error': f'Ollama error: {str(e)}'}), 500
+    
+    # Switch the model
+    old_model = CONFIG['model']
+    CONFIG['model'] = new_model
+    
+    # Test the new model
+    try:
+        test_response = LLMInterface.get_response("Hello", temperature=0.1, num_predict=10)
+        if "not available" in test_response or "error" in test_response.lower():
+            # Revert if test fails
+            CONFIG['model'] = old_model
+            return jsonify({'error': f'Model {new_model} failed test: {test_response}'}), 500
+    except Exception as e:
+        # Revert if test fails
+        CONFIG['model'] = old_model
+        return jsonify({'error': f'Model test failed: {str(e)}'}), 500
+    
+    return jsonify({
+        'success': True,
+        'previous_model': old_model,
+        'current_model': CONFIG['model'],
+        'test_response': test_response[:100] + '...' if len(test_response) > 100 else test_response
+    })
+
+@app.route('/api/model/list', methods=['GET'])
+def api_model_list():
+    """Get list of available models"""
+    try:
+        import requests
+        base = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+        response = requests.get(f'{base}/api/tags')
+        if response.status_code == 200:
+            models = response.json().get('models', [])
+            return jsonify({
+                'current_model': CONFIG['model'],
+                'available_models': [
+                    {
+                        'name': m['name'],
+                        'size': m.get('size', 'unknown'),
+                        'modified': m.get('modified_at', ''),
+                        'current': m['name'] == CONFIG['model']
+                    }
+                    for m in models
+                ]
+            })
+        else:
+            return jsonify({'error': 'Could not connect to Ollama'}), 500
+    except Exception as e:
+        return jsonify({'error': f'Ollama error: {str(e)}'}), 500
+
+@app.route('/api/profile/standard', methods=['POST'])
+def api_profile_standard():
+    """Run standard profiling test on CURRENT model only"""
+    try:
+        import time
+        import psutil
+        import requests
+        import os
+        
+        # Use the challenging 5-idea stress test
+        test_issue = "My laptop turned dark green all over sudden... what happened?"
+        
+        # Get baseline system metrics
+        process = psutil.Process()
+        cpu_before = psutil.cpu_percent(interval=1)
+        memory_before = psutil.virtual_memory()
+        
+        payload = {
+            'issue': test_issue,
+            'n': 5,  # The challenging 5-idea test  
+            'creativity': 2,
+            'debug': True
+        }
+        
+        # Time the request
+        start_time = time.time()
+        
+        # Call our own brainstorm endpoint
+        response = requests.post(
+            'http://localhost:8080/api/ideas/brainstorm',
+            json=payload,
+            timeout=120  # Increased timeout for large models like 34B
+        )
+        
+        end_time = time.time()
+        response_time = end_time - start_time
+        
+        if response.status_code != 200:
+            raise Exception(f"Brainstorm API call failed: {response.status_code}")
+            
+        result = response.json()
+        
+        # Get post-test system metrics  
+        cpu_after = psutil.cpu_percent(interval=1)
+        memory_after = psutil.virtual_memory()
+        
+        # Calculate performance metrics
+        model = CONFIG['model']
+        
+        # Estimate tokens (rough approximation)
+        response_text = str(result)
+        estimated_tokens = len(response_text.split()) * 1.3  # ~1.3 tokens per word
+        tokens_per_sec = estimated_tokens / response_time if response_time > 0 else 0
+        
+        # Get model size info from Ollama
+        try:
+            ollama_response = requests.get(f"{os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')}/api/tags", timeout=5)
+            model_info = {}
+            if ollama_response.status_code == 200:
+                models = ollama_response.json().get('models', [])
+                for m in models:
+                    if m['name'] == model:
+                        # Size is in bytes, convert to GB
+                        size_gb = int(m.get('size', 0)) / (1024**3)
+                        model_info = {
+                            'size_gb': round(size_gb, 1),
+                            'modified': m.get('modified_at', 'unknown')
+                        }
+                        break
+        except:
+            model_info = {'size_gb': 'unknown', 'modified': 'unknown'}
+        
+        # Performance metrics
+        performance_metrics = {
+            'response_time_sec': round(response_time, 2),
+            'tokens_per_second': round(tokens_per_sec, 1),
+            'estimated_tokens': round(estimated_tokens),
+            'cpu_usage_percent': round((cpu_before + cpu_after) / 2, 1),
+            'ram_usage_percent': round(memory_after.percent, 1),
+            'ram_used_gb': round(memory_after.used / (1024**3), 1),
+            'model_size_disk_gb': model_info.get('size_gb', 'unknown'),
+            'model_modified': model_info.get('modified', 'unknown')
+        }
+        
+        # Analyze results
+        ideas_count = len(result.get('ideas', []))
+        success = ideas_count >= 3  # Success if 3+ ideas generated
+        n_idea_success = ideas_count >= 5  # Perfect if all 5 ideas
+        
+        # Categorize model size
+        model = CONFIG['model']
+        if '1b' in model.lower():
+            size_category = 'tiny'
+        elif '3b' in model.lower():
+            size_category = 'small' 
+        elif '7b' in model.lower() or '8b' in model.lower():
+            size_category = 'medium'
+        elif '13b' in model.lower():
+            size_category = 'large'
+        elif '20b' in model.lower() or '34b' in model.lower():
+            size_category = 'xlarge'
+        else:
+            size_category = 'unknown'
+            
+        # More stringent production readiness criteria  
+        production_ready = (
+            success and 
+            ideas_count >= 4 and
+            tokens_per_sec >= 5.0 and  # At least 5 tokens/sec
+            response_time <= 30.0 and  # Under 30 seconds
+            memory_after.percent <= 85  # RAM usage under 85%
+        )
+        
+        return jsonify({
+            'model': model,
+            'test_issue': test_issue,
+            'result': result,
+            'performance_metrics': performance_metrics,
+            'analysis': {
+                'ideas_generated': ideas_count,
+                'success': success,
+                'n_idea_generation_success': n_idea_success,
+                'model_size_category': size_category,
+                'production_ready': production_ready,
+                'performance_tier': 'excellent' if ideas_count >= 5 else 'good' if ideas_count >= 3 else 'poor',
+                'speed_rating': 'fast' if tokens_per_sec >= 15 else 'medium' if tokens_per_sec >= 5 else 'slow'
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Standard profile test failed: {str(e)}'}), 500
+
+@app.route('/api/test-presets', methods=['GET'])
+def api_test_presets():
+    """Get predefined test issues for profiling"""
+    presets = {
+        'hardware': [
+            "My laptop turned dark green all over sudden... what happened?",
+            "Computer won't boot, just shows black screen",
+            "Laptop gets extremely hot and shuts down randomly",
+            "USB ports stopped working after Windows update"
+        ],
+        'network': [
+            "DNS resolution is failing on Ubuntu", 
+            "WiFi keeps disconnecting every few minutes",
+            "Can't connect to work VPN from home",
+            "Internet is slow but only on this computer"
+        ],
+        'system': [
+            "System randomly freezes during video calls",
+            "Dual boot time is wrong between Windows and Linux",
+            "Getting blue screen errors with MEMORY_MANAGEMENT",
+            "Audio crackling and popping through headphones"
+        ],
+        'stress_tests': [
+            "My laptop turned dark green all over sudden... what happened?", # The 5-idea challenge
+            "Complex network issue with multiple symptoms: DNS fails, VPN won't connect, and WiFi drops randomly", # JSON parsing challenge
+            "Generate comprehensive troubleshooting for enterprise server that won't boot" # Large response test
+        ]
+    }
+    
+    return jsonify(presets)
+
+@app.route('/api/logs', methods=['GET'])
+def api_logs():
+    """Return JSONL logs for a given date with optional filtering."""
+    try:
+        import json as _json
+        logs_dir = _logs_dir()
+        date = request.args.get('date')
+        mode = request.args.get('mode')
+        limit = int(request.args.get('limit', '200'))
+
+        files = sorted(logs_dir.glob('*.jsonl'))
+        if not files:
+            return jsonify({'date': None, 'count': 0, 'entries': []})
+
+        target = None
+        if date:
+            cand = logs_dir / f"{date}.jsonl"
+            target = cand if cand.exists() else None
+        if target is None:
+            target = files[-1]
+
+        entries = []
+        with target.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = _json.loads(line)
+                    if mode and obj.get('mode') != mode:
+                        continue
+                    entries.append(obj)
+                except Exception:
+                    continue
+        # Keep only the last N entries
+        if limit and len(entries) > limit:
+            entries = entries[-limit:]
+
+        return jsonify({
+            'date': target.stem,
+            'count': len(entries),
+            'files': [p.name for p in files],
+            'entries': entries
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/logs', methods=['GET'])
+def logs_view():
+    """Simple browser viewer for JSONL logs with filters."""
+    html = '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>RoadNerd Logs</title>
+      <style>
+        body { font-family: system-ui, sans-serif; background: #0b1220; color: #e0e6f0; padding: 20px; }
+        header { margin-bottom: 12px; }
+        select, input { background: #111827; color: #e0e6f0; border: 1px solid #374151; border-radius: 6px; padding: 6px; }
+        button { background: #2563eb; color: white; border: 0; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+        pre { background: #0b1220; border: 1px solid #1f2937; border-radius: 8px; padding: 10px; max-height: 60vh; overflow: auto; }
+        .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      </style>
+    </head>
+    <body>
+      <h1>RoadNerd Logs</h1>
+      <div class="row">
+        <label>Date <input id="date" placeholder="YYYYMMDD (optional)"/></label>
+        <label>Mode
+          <select id="mode">
+            <option value="">(any)</option>
+            <option>legacy</option>
+            <option>prompt_suite</option>
+            <option>brainstorm</option>
+            <option>probe</option>
+            <option>judge</option>
+            <option>disambiguation</option>
+          </select>
+        </label>
+        <label>Limit <input id="limit" value="200" size="4"/></label>
+        <button onclick="loadLogs()">Load</button>
+      </div>
+      <pre id="out">(no data)</pre>
+      <script>
+        function j(o){ return JSON.stringify(o, null, 2); }
+        async function loadLogs(){
+          const d = document.getElementById('date').value.trim();
+          const m = document.getElementById('mode').value;
+          const l = document.getElementById('limit').value;
+          const qs = new URLSearchParams();
+          if (d) qs.set('date', d);
+          if (m) qs.set('mode', m);
+          if (l) qs.set('limit', l);
+          const r = await fetch('/api/logs?' + qs.toString());
+          const data = await r.json();
+          document.getElementById('out').textContent = j(data);
+        }
+        loadLogs();
+      </script>
+    </body>
+    </html>
+    '''
+    return render_template_string(html)
+
 @app.route('/api/status', methods=['GET'])
 def api_status():
     """Return system status"""
@@ -752,6 +1143,7 @@ def api_docs():
         <h2>POST /api/diagnose</h2>
         <label>Issue</label>
         <textarea id="issue" rows="4">My WiFi is not working</textarea>
+        <label><input id="diagDebug" type="checkbox"/> Debug</label>
         <button onclick="callDiagnose()">Diagnose</button>
         <pre id="diagOut"></pre>
       </section>
@@ -771,6 +1163,7 @@ def api_docs():
         <input id="nIdeas" value="5"/>
         <label>Creativity (0-3)</label>
         <input id="creativity" value="2"/>
+        <label><input id="brainDebug" type="checkbox"/> Debug</label>
         <button onclick="callBrainstorm()">Brainstorm</button>
         <pre id="brainOut"></pre>
       </section>
@@ -798,6 +1191,41 @@ def api_docs():
         <button onclick="callLLM()">Ask</button>
         <pre id="llmOut"></pre>
       </section>
+      <section>
+        <h2>Standard Profiling Suite</h2>
+        <button onclick="loadTestPresets()">📋 Load Test Issue Presets</button>
+        <button onclick="runStandardProfile()" style="background: #059669; margin-left: 10px;">🧪 Run Standard Profile</button>
+        <br><br>
+        <label>Test Categories:</label>
+        <select id="presetCategory" onchange="loadCategoryIssues()" style="width: 200px; margin: 5px;">
+          <option value="">Select category...</option>
+          <option value="hardware">Hardware Issues</option>
+          <option value="network">Network Issues</option>
+          <option value="system">System Issues</option>
+          <option value="stress_tests">Stress Tests</option>
+        </select>
+        <br>
+        <label>Select Test Issue:</label>
+        <select id="presetIssue" onchange="usePresetIssue()" style="width: 100%; margin: 5px 0;">
+          <option value="">Choose an issue to auto-fill...</option>
+        </select>
+        <pre id="presetOut">Standard profiling will test N-idea generation across multiple models with predefined diagnostic scenarios</pre>
+      </section>
+      <section>
+        <h2>Model Switching</h2>
+        <button onclick="getModel()">🔄 List Available Models</button>
+        <br><br>
+        <label>Select Model:</label>
+        <select id="modelSelect" style="width: 300px; margin: 5px 0;">
+          <option value="">Loading models...</option>
+        </select>
+        <br>
+        <label>Or enter manually:</label>
+        <input id="newModel" placeholder="e.g., llama3.2:3b or gpt-oss:20b" style="width: 300px;"/>
+        <br><br>
+        <button onclick="setModel()" style="background: #007acc; color: white; padding: 8px 16px;">🔄 Switch Model</button>
+        <pre id="modelOut">Click "List Available Models" to see all models</pre>
+      </section>
       <script>
         function j(o){ return JSON.stringify(o, null, 2); }
         function headers(){
@@ -811,7 +1239,9 @@ def api_docs():
           document.getElementById('statusOut').textContent = j(await r.json());
         }
         async function callDiagnose(){
-          const r = await fetch('/api/diagnose', {method:'POST', headers: headers(), body: JSON.stringify({issue: document.getElementById('issue').value})});
+          const body = {issue: document.getElementById('issue').value};
+          if (document.getElementById('diagDebug').checked) body.debug = true;
+          const r = await fetch('/api/diagnose', {method:'POST', headers: headers(), body: JSON.stringify(body)});
           document.getElementById('diagOut').textContent = j(await r.json());
         }
         async function callExecute(){
@@ -819,7 +1249,9 @@ def api_docs():
           document.getElementById('execOut').textContent = j(await r.json());
         }
         async function callBrainstorm(){
+          showProgress('brainOut', '🧠 Generating ideas... (may take 15-30s for larger models)');
           const body = {issue: document.getElementById('issueIdeas').value, n: parseInt(document.getElementById('nIdeas').value||'5'), creativity: parseInt(document.getElementById('creativity').value||'2')};
+          if (document.getElementById('brainDebug').checked) body.debug = true;
           const r = await fetch('/api/ideas/brainstorm', {method:'POST', headers: headers(), body: JSON.stringify(body)});
           document.getElementById('brainOut').textContent = j(await r.json());
         }
@@ -836,8 +1268,141 @@ def api_docs():
           document.getElementById('judgeOut').textContent = j(await r.json());
         }
         async function callLLM(){
+          showProgress('llmOut', '🧠 LLM processing...');
           const r = await fetch('/api/llm', {method:'POST', headers: headers(), body: JSON.stringify({prompt: document.getElementById('prompt').value})});
           document.getElementById('llmOut').textContent = j(await r.json());
+        }
+        async function getModel(){
+          document.getElementById('modelOut').textContent = '🔄 Loading available models...';
+          const r = await fetch('/api/model/list', {headers: headers()});
+          const data = await r.json();
+          document.getElementById('modelOut').textContent = j(data);
+          
+          // Auto-populate dropdown if models available
+          if (data.available_models) {
+            const select = document.getElementById('modelSelect');
+            if (select) {
+              select.innerHTML = '<option value="">Choose model...</option>';
+              data.available_models.forEach(m => {
+                const option = document.createElement('option');
+                option.value = m.name;
+                option.textContent = `${m.name} (${m.size})${m.current ? ' [CURRENT]' : ''}`;
+                option.selected = m.current;
+                select.appendChild(option);
+              });
+            }
+          }
+        }
+        async function setModel(){
+          const m = document.getElementById('newModel').value || document.getElementById('modelSelect')?.value;
+          if (!m) {
+            document.getElementById('modelOut').textContent = 'Please enter or select a model name';
+            return;
+          }
+          
+          document.getElementById('modelOut').textContent = `🔄 Switching to ${m}... (testing model)`;
+          const r = await fetch('/api/model/switch', {method:'POST', headers: headers(), body: JSON.stringify({model: m})});
+          const data = await r.json();
+          document.getElementById('modelOut').textContent = j(data);
+          
+          // Refresh model list if successful
+          if (data.success) {
+            setTimeout(getModel, 500);
+          }
+        }
+        
+        // Add progress indicators for LLM calls
+        function showProgress(elementId, message = '🧠 LLM thinking...') {
+          document.getElementById(elementId).textContent = message;
+        }
+        
+        // Standard Profiling Functions
+        let testPresets = {};
+        
+        async function loadTestPresets() {
+          try {
+            const r = await fetch('/api/test-presets');
+            testPresets = await r.json();
+            document.getElementById('presetOut').textContent = 'Test presets loaded! Select a category to see available issues.';
+          } catch (e) {
+            document.getElementById('presetOut').textContent = 'Error loading presets: ' + e.message;
+          }
+        }
+        
+        function loadCategoryIssues() {
+          const category = document.getElementById('presetCategory').value;
+          const select = document.getElementById('presetIssue');
+          select.innerHTML = '<option value="">Choose an issue to auto-fill...</option>';
+          
+          if (category && testPresets[category]) {
+            testPresets[category].forEach(issue => {
+              const option = document.createElement('option');
+              option.value = issue;
+              option.textContent = issue;
+              select.appendChild(option);
+            });
+          }
+        }
+        
+        function usePresetIssue() {
+          const issue = document.getElementById('presetIssue').value;
+          if (issue) {
+            document.getElementById('issueIdeas').value = issue;
+            document.getElementById('presetOut').textContent = `Selected: "${issue}" - Ready to test brainstorming!`;
+          }
+        }
+        
+        async function runStandardProfile() {
+          document.getElementById('presetOut').textContent = '🧪 Running 5-idea stress test on current model... (may take 15-30s)';
+          
+          try {
+            const r = await fetch('/api/profile/standard', {method: 'POST', headers: headers()});
+            const data = await r.json();
+            
+            if (data.error) {
+              document.getElementById('presetOut').textContent = 'Error: ' + data.error;
+              return;
+            }
+            
+            const analysis = data.analysis;
+            const metrics = data.performance_metrics;
+            let output = `STANDARD PROFILE RESULTS\\n\\n`;
+            output += `Model: ${data.model}\\n`;
+            output += `Test: "${data.test_issue}"\\n\\n`;
+            
+            // Performance metrics
+            output += `PERFORMANCE METRICS:\\n`;
+            output += `• Response Time: ${metrics.response_time_sec}s\\n`;
+            output += `• Tokens/Second: ${metrics.tokens_per_second} (${analysis.speed_rating})\\n`;
+            output += `• Estimated Tokens: ${metrics.estimated_tokens}\\n`;
+            output += `• CPU Usage: ${metrics.cpu_usage_percent}%\\n`;
+            output += `• RAM Usage: ${metrics.ram_usage_percent}% (${metrics.ram_used_gb}GB)\\n`;
+            output += `• Model Size: ${metrics.model_size_disk_gb}GB on disk\\n\\n`;
+            
+            // Quality analysis
+            output += `QUALITY ANALYSIS:\\n`;
+            output += `• Ideas Generated: ${analysis.ideas_generated}/5\\n`;
+            output += `• Success: ${analysis.success ? '✅ PASS' : '❌ FAIL'}\\n`;
+            output += `• N-Idea Generation: ${analysis.n_idea_generation_success ? '✅ PASS' : '❌ FAIL'}\\n`;
+            output += `• Model Size Category: ${analysis.model_size_category}\\n`;
+            output += `• Performance Tier: ${analysis.performance_tier.toUpperCase()}\\n`;
+            output += `• Production Ready: ${analysis.production_ready ? '✅ YES' : '❌ NO'}\\n\\n`;
+            
+            // Show actual ideas if available
+            if (data.result && data.result.ideas) {
+              output += `IDEAS GENERATED:\\n`;
+              data.result.ideas.forEach((idea, i) => {
+                output += `${i+1}. ${idea.hypothesis} (${idea.category})\\n`;
+              });
+            }
+            
+            output += `\\n💡 Use model switching above to test different models with this same stress test!`;
+            
+            document.getElementById('presetOut').textContent = output;
+            
+          } catch (e) {
+            document.getElementById('presetOut').textContent = 'Error: ' + e.message;
+          }
         }
       </script>
     </body>
@@ -928,6 +1493,7 @@ def api_diagnose():
     """Diagnose a system issue"""
     data = request.json
     issue = data.get('issue', '')
+    debug_flag = bool(data.get('debug')) if isinstance(data, dict) else False
     # Classification and retrieval (Phase A scaffolding)
     try:
         import classify as _clf  # local directory
@@ -980,6 +1546,16 @@ def api_diagnose():
             'category': {'label': pred.label, 'confidence': pred.confidence, 'candidates': pred.candidates},
         }
     }
+
+    if debug_flag:
+        response_payload['debug'] = {
+            'retrieval_snippets': [
+                {'source': str(s.source), 'text': s.text[:300], 'score': s.score}
+                for s in snippets
+            ],
+            'prompt_excerpt': prompt[:600],
+            'llm_options': {'temperature': 0.0, 'num_predict': 192}
+        }
 
     # Phase 0 logging (legacy mode)
     try:
@@ -1053,6 +1629,32 @@ def api_llm():
         'model': CONFIG['model'],
         'backend': CONFIG['llm_backend']
     })
+
+@app.route('/api/model', methods=['GET', 'POST'])
+def api_model():
+    """Get or set the active LLM model (dynamic). POST {model}."""
+    if request.method == 'GET':
+        return jsonify({'backend': CONFIG['llm_backend'], 'model': CONFIG['model']})
+
+    data = request.get_json() or {}
+    new_model = data.get('model')
+    if not new_model:
+        return jsonify({'error': 'Missing model'}), 400
+
+    old = CONFIG['model']
+    CONFIG['model'] = new_model
+
+    pulled = False
+    pull_error = None
+    if CONFIG['llm_backend'] == 'ollama' and os.getenv('RN_PULL_MODEL', '1').lower() in ('1', 'true', 'yes', 'on'):
+        try:
+            # Attempt a non-blocking pull to warm the cache
+            subprocess.Popen(['ollama', 'pull', new_model], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            pulled = True
+        except Exception as e:
+            pull_error = str(e)
+
+    return jsonify({'ok': True, 'previous': old, 'model': CONFIG['model'], 'pull_started': pulled, 'pull_error': pull_error})
 
 @app.route('/api/scan_network', methods=['GET'])
 def api_scan_network():
@@ -1128,7 +1730,7 @@ def api_brainstorm():
     
     try:
         # Generate ideas with high exploration
-        ideas = BrainstormEngine.generate_ideas(issue, n, creativity, category_hint=category_hint)
+        ideas = BrainstormEngine.generate_ideas(issue, n, creativity, category_hint=category_hint, retrieval_text=retrieval_text)
         
         # Log the brainstorming session
         _log_llm_run({

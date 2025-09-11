@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+INCLUDE_MODELS=false
+TARGET=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --include-models|-m) INCLUDE_MODELS=true; shift ;;
+    *) TARGET="$1"; shift ;;
+  esac
+done
+
+if [ -z "${TARGET:-}" ]; then
+  echo "Usage: $0 [--include-models] <target_dir>" >&2
+  exit 1
+fi
+
+TARGET="$1"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+echo "Creating portable bundle at: $TARGET"
+mkdir -p "$TARGET/poc/core/prompts"
+mkdir -p "$TARGET/tests/prompts"
+mkdir -p "$TARGET/tools"
+mkdir -p "$TARGET/models"
+
+# Copy core server/client and prompts
+cp -v "$ROOT_DIR/poc/core/roadnerd_server.py" "$TARGET/poc/core/" 
+cp -v "$ROOT_DIR/poc/core/roadnerd_client.py" "$TARGET/poc/core/" 
+cp -rv "$ROOT_DIR/poc/core/prompts/." "$TARGET/poc/core/prompts/" 
+
+# Copy tools/scripts for testing
+cp -v "$ROOT_DIR/tools/run_prompt_suite.py" "$TARGET/tools/" || true
+cp -v "$ROOT_DIR/tools/run_disambiguation_flow.py" "$TARGET/tools/" || true
+cp -v "$ROOT_DIR/tools/aggregate_llm_runs.py" "$TARGET/tools/" || true
+cp -v "$ROOT_DIR/tests/prompts/cases.yaml" "$TARGET/tests/prompts/" || true
+
+# Optionally include models cache tarball
+if [ "$INCLUDE_MODELS" = true ]; then
+  CACHE1="$HOME/.roadnerd/models/ollama-models.tar.gz"
+  CACHE2="$HOME/.ollama/models"
+  if [ -f "$CACHE1" ]; then
+    echo "Including cached models from $CACHE1"
+    cp -v "$CACHE1" "$TARGET/models/ollama-models.tar.gz"
+  elif [ -d "$CACHE2" ]; then
+    echo "Creating models tarball from $CACHE2 (this may take time)"
+    tar czf "$TARGET/models/ollama-models.tar.gz" -C "$HOME" .ollama/models
+  else
+    echo "No model cache found; skipping. You can run profile-machine.py --cache-models beforehand."
+  fi
+fi
+
+# Start script
+cat > "$TARGET/start_roadnerd.sh" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+export RN_SAFE_MODE=${RN_SAFE_MODE:-true}
+export RN_PROMPT_DIR="$DIR/poc/core/prompts"
+export RN_LOG_DIR="$DIR/logs"
+mkdir -p "$RN_LOG_DIR"
+
+echo "Starting RoadNerd at http://localhost:${RN_PORT:-8080}"
+python3 "$DIR/poc/core/roadnerd_server.py"
+EOF
+chmod +x "$TARGET/start_roadnerd.sh"
+
+# Optional installer for models
+cat > "$TARGET/install_models.sh" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+ARCHIVE="$DIR/models/ollama-models.tar.gz"
+
+if [ ! -f "$ARCHIVE" ]; then
+  echo "No models archive found at $ARCHIVE" >&2
+  exit 1
+fi
+
+if ! command -v ollama >/dev/null 2>&1; then
+  echo "Installing Ollama..."
+  curl -fsSL https://ollama.com/install.sh | sh
+fi
+
+echo "Extracting models to ~/.ollama ..."
+mkdir -p "$HOME/.ollama"
+tar xzf "$ARCHIVE" -C "$HOME"
+echo "Done. You can now run: ollama serve &"
+EOF
+chmod +x "$TARGET/install_models.sh"
+
+echo "Done. To run on another machine:"
+echo "  1) Copy '$TARGET' to USB"
+echo "  2) On the target machine: cd into the folder and run ./start_roadnerd.sh"
+echo "  3) Open http://localhost:8080/api-docs to test, choose model via the Model section"
+if [ "$INCLUDE_MODELS" = true ]; then
+  echo "  (Optional) Install bundled models: ./install_models.sh (then 'ollama serve &')"
+fi
