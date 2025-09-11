@@ -38,6 +38,7 @@ except Exception:
 # Import modular components
 from modules.system_diagnostics import SystemDiagnostics
 from modules.command_executor import CommandExecutor
+from modules.llm_interface import LLMInterface
 
 # Configuration
 CONFIG = {
@@ -61,6 +62,9 @@ CONFIG['safe_mode'] = sm.lower() in ('1', 'true', 'yes', 'on')
 CONFIG['bind_host'] = os.getenv('RN_BIND', os.getenv('RN_BIND_HOST', CONFIG['bind_host']))
 if os.getenv('RN_PROD', '0').lower() in ('1', 'true', 'yes', 'on') and not os.getenv('RN_BIND') and not os.getenv('RN_BIND_HOST'):
     CONFIG['bind_host'] = '10.55.0.1'
+
+# Initialize LLM Interface
+llm_interface = None  # Will be initialized after config is fully loaded
 
 # Knowledge base - embedded for portability
 KNOWLEDGE_BASE = {
@@ -115,91 +119,17 @@ KNOWLEDGE_BASE = {
 }
 
 
-class LLMInterface:
-    """Interface to various LLM backends"""
-    
-    @staticmethod
-    def query_ollama(prompt: str, options_overrides: Optional[Dict] = None) -> str:
-        """Query Ollama API - automatically selects chat vs generate based on model"""
-        try:
-            import requests
-            base = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
-            
-            # Check if we should use chat mode (auto-detect GPT-OSS models or force via env)
-            use_chat_mode = os.getenv('RN_USE_CHAT_MODE', 'auto').lower()
-            force_chat = (use_chat_mode == 'force') or (use_chat_mode == 'auto' and CONFIG['model'].startswith('gpt-oss'))
-            
-            # Defaults from environment with GPT-OSS specific settings
-            if force_chat:
-                # GPT-OSS needs temperature=1.0, top_p=1.0 by default
-                options = {
-                    'temperature': float(os.getenv('RN_TEMP', '1.0')),
-                    'top_p': float(os.getenv('RN_TOP_P', '1.0')),
-                    'num_predict': int(os.getenv('RN_NUM_PREDICT', '128')),
-                    'num_ctx': int(os.getenv('RN_NUM_CTX', '2048')),
-                }
-            else:
-                # Standard models use previous defaults
-                options = {
-                    'temperature': float(os.getenv('RN_TEMP', '0')),
-                    'num_predict': int(os.getenv('RN_NUM_PREDICT', '128')),
-                    'num_ctx': int(os.getenv('RN_NUM_CTX', '2048')),
-                }
-            
-            if options_overrides:
-                options.update({k: v for k, v in options_overrides.items() if v is not None})
-            
-            if force_chat:
-                # Use chat API for GPT-OSS models
-                payload = {
-                    'model': CONFIG['model'],
-                    'messages': [
-                        {'role': 'system', 'content': 'You are a helpful diagnostic assistant.'},
-                        {'role': 'user', 'content': prompt}
-                    ],
-                    'stream': False,
-                    'options': options,
-                }
-                response = requests.post(f'{base}/api/chat', json=payload)
-                result = response.json()
-                if 'message' in result and 'content' in result['message']:
-                    return result['message']['content']
-                else:
-                    return result.get('response', 'No response from Ollama chat API')
-            else:
-                # Use generate API for standard models
-                payload = {
-                    'model': CONFIG['model'],
-                    'prompt': prompt,
-                    'stream': False,
-                    'options': options,
-                }
-                response = requests.post(f'{base}/api/generate', json=payload)
-                return response.json().get('response', 'No response from Ollama')
-        except Exception as e:
-            return f"Ollama not available: {e}"
-    
-    @staticmethod
-    def query_llamafile(prompt: str, options_overrides: Optional[Dict] = None) -> str:
-        """Query llamafile server"""
-        try:
-            import requests
-            base = os.getenv('LLAMAFILE_BASE_URL', 'http://localhost:8081')
-            response = requests.post(f'{base}/completion', json={'prompt': prompt, 'n_predict': 200})
-            return response.json().get('content', 'No response from llamafile')
-        except Exception as e:
-            return f"Llamafile not available: {e}"
-    
-    @staticmethod
-    def get_response(prompt: str, *, temperature: Optional[float] = None, num_predict: Optional[int] = None, top_p: Optional[float] = None) -> str:
-        """Get response from configured LLM with optional per-request options."""
-        overrides = {'temperature': temperature, 'num_predict': num_predict, 'top_p': top_p}
-        if CONFIG['llm_backend'] == 'ollama':
-            return LLMInterface.query_ollama(prompt, options_overrides=overrides)
-        elif CONFIG['llm_backend'] == 'llamafile':
-            return LLMInterface.query_llamafile(prompt, options_overrides=overrides)
-        else:
-            return "No LLM backend configured"
+def get_llm_interface():
+    """Get or create the global LLM interface instance"""
+    global llm_interface
+    if llm_interface is None:
+        llm_interface = LLMInterface(CONFIG['llm_backend'], CONFIG['model'])
+    return llm_interface
+
+def update_llm_config():
+    """Update the global LLM interface when config changes"""
+    global llm_interface
+    llm_interface = LLMInterface(CONFIG['llm_backend'], CONFIG['model'])
 
 
 # Prompt loader and simple templating
@@ -349,7 +279,7 @@ class BrainstormEngine:
         # Get LLM response with per-request creativity
         # Each JSON idea ~100-200 tokens, so scale appropriately
         num_predict = max(512, n * 120)  # At least 120 tokens per idea
-        llm_response = LLMInterface.get_response(
+        llm_response = get_llm_interface().get_response(
             prompt,
             temperature=temperature,
             num_predict=num_predict,
@@ -653,17 +583,20 @@ def api_model_switch():
     # Switch the model
     old_model = CONFIG['model']
     CONFIG['model'] = new_model
+    update_llm_config()  # Update LLM interface with new model
     
     # Test the new model
     try:
-        test_response = LLMInterface.get_response("Hello", temperature=0.1, num_predict=10)
+        test_response = get_llm_interface().get_response("Hello", temperature=0.1, num_predict=10)
         if "not available" in test_response or "error" in test_response.lower():
             # Revert if test fails
             CONFIG['model'] = old_model
+            update_llm_config()  # Revert LLM interface
             return jsonify({'error': f'Model {new_model} failed test: {test_response}'}), 500
     except Exception as e:
         # Revert if test fails
         CONFIG['model'] = old_model
+        update_llm_config()  # Revert LLM interface
         return jsonify({'error': f'Model test failed: {str(e)}'}), 500
     
     return jsonify({
@@ -1402,7 +1335,7 @@ def api_diagnose():
     }
     prompt = _render_template(tpl, ctx)
     
-    llm_response = LLMInterface.get_response(prompt, temperature=0.0, num_predict=192)
+    llm_response = get_llm_interface().get_response(prompt, temperature=0.0, num_predict=192)
 
     response_payload = {
         'issue': issue,
@@ -1490,7 +1423,7 @@ def api_llm():
     if not prompt:
         return jsonify({'error': 'No prompt provided'}), 400
     
-    response = LLMInterface.get_response(prompt)
+    response = get_llm_interface().get_response(prompt)
     
     return jsonify({
         'prompt': prompt,
@@ -1512,6 +1445,7 @@ def api_model():
 
     old = CONFIG['model']
     CONFIG['model'] = new_model
+    update_llm_config()  # Update LLM interface with new model
 
     pulled = False
     pull_error = None
