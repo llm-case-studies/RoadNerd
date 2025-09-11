@@ -283,8 +283,11 @@ class SystemProfiler:
             return json.load(f)
 
 class LLMBenchmark:
-    def __init__(self, ollama_base: str = "http://localhost:11434"):
+    def __init__(self, ollama_base: str = "http://localhost:11434", roadnerd_base: str = "http://localhost:8080"):
         self.ollama_base = ollama_base
+        self.roadnerd_base = roadnerd_base
+        self.results_dir = Path(__file__).parent.parent / "logs" / "escalation_runs"
+        self.results_dir.mkdir(parents=True, exist_ok=True)
         
     def get_available_models(self) -> List[Dict[str, Any]]:
         """Get list of available Ollama models"""
@@ -388,6 +391,229 @@ class LLMBenchmark:
             "System is running slow. What are the most important diagnostic commands?",
             "I can't access SSH on this machine. How do I troubleshoot SSH connectivity?"
         ]
+
+    def test_roadnerd_workflow(self, model_name: str) -> Dict[str, Any]:
+        """Test RoadNerd-specific workflow endpoints and challenging tasks"""
+        results = {
+            'model': model_name,
+            'timestamp': datetime.now().isoformat(),
+            'workflow_tests': [],
+            'summary': {}
+        }
+        
+        # Test cases that stress the model capabilities
+        test_cases = [
+            {
+                'name': 'basic_diagnose',
+                'endpoint': '/api/diagnose',
+                'payload': {'issue': 'WiFi authentication failed'},
+                'expected_fields': ['issue', 'llm_suggestion', 'system_context'],
+                'timeout': 30
+            },
+            {
+                'name': 'single_idea_brainstorm',
+                'endpoint': '/api/ideas/brainstorm', 
+                'payload': {'issue': 'laptop overheating', 'n': 1, 'creativity': 1},
+                'expected_fields': ['ideas', 'meta'],
+                'timeout': 45
+            },
+            {
+                'name': 'multi_idea_brainstorm_stress',
+                'endpoint': '/api/ideas/brainstorm',
+                'payload': {'issue': 'network is unreliable', 'n': 5, 'creativity': 2, 'debug': True},
+                'expected_fields': ['ideas', 'meta', 'debug'],
+                'timeout': 90,
+                'stress_test': True
+            },
+            {
+                'name': 'creative_brainstorm',
+                'endpoint': '/api/ideas/brainstorm',
+                'payload': {'issue': 'computer randomly freezes', 'n': 3, 'creativity': 3},
+                'expected_fields': ['ideas', 'meta'],
+                'timeout': 60
+            },
+            {
+                'name': 'probe_safety',
+                'endpoint': '/api/ideas/probe',
+                'payload': {'idea_id': 'test123', 'checks': ['systemctl status NetworkManager', 'df -h']},
+                'expected_fields': ['results', 'safety'],
+                'timeout': 30
+            },
+            {
+                'name': 'judge_ranking',
+                'endpoint': '/api/ideas/judge',
+                'payload': {
+                    'ideas': [
+                        {'id': 'test1', 'hypothesis': 'DNS issue', 'risk': 'low'},
+                        {'id': 'test2', 'hypothesis': 'Hardware failure', 'risk': 'high'}
+                    ]
+                },
+                'expected_fields': ['rankings', 'analysis'],
+                'timeout': 45
+            }
+        ]
+        
+        successful_tests = 0
+        total_response_time = 0
+        json_parse_failures = 0
+        n_idea_success = False
+        
+        for test_case in test_cases:
+            test_result = self._run_roadnerd_test(test_case)
+            results['workflow_tests'].append(test_result)
+            
+            if test_result['success']:
+                successful_tests += 1
+                total_response_time += test_result['response_time']
+                
+                # Check for N-idea generation success (our main challenge)
+                if test_case['name'] == 'multi_idea_brainstorm_stress':
+                    ideas_count = test_result.get('parsed_response', {}).get('meta', {}).get('count', 0)
+                    actual_ideas = len(test_result.get('parsed_response', {}).get('ideas', []))
+                    n_idea_success = (ideas_count >= 3 and actual_ideas >= 3)
+                    test_result['n_idea_success'] = n_idea_success
+                    test_result['ideas_requested'] = 5
+                    test_result['ideas_received'] = actual_ideas
+            else:
+                if 'json' in test_result.get('error', '').lower():
+                    json_parse_failures += 1
+        
+        # Calculate summary metrics
+        results['summary'] = {
+            'success_rate': successful_tests / len(test_cases),
+            'avg_response_time': total_response_time / successful_tests if successful_tests > 0 else 0,
+            'total_tests': len(test_cases),
+            'successful_tests': successful_tests,
+            'json_parse_failures': json_parse_failures,
+            'n_idea_generation_success': n_idea_success,
+            'model_size_category': self._categorize_model_size(model_name),
+            'recommended_for_production': successful_tests >= 4 and n_idea_success
+        }
+        
+        # Save individual test results to centralized location
+        self._save_escalation_results(model_name, results)
+        
+        return results
+    
+    def _run_roadnerd_test(self, test_case: Dict[str, Any]) -> Dict[str, Any]:
+        """Run a single RoadNerd workflow test"""
+        start_time = time.time()
+        
+        try:
+            url = f"{self.roadnerd_base}{test_case['endpoint']}"
+            timeout = test_case.get('timeout', 30)
+            
+            response = requests.post(
+                url,
+                json=test_case['payload'],
+                headers={'Content-Type': 'application/json'},
+                timeout=timeout
+            )
+            
+            end_time = time.time()
+            response_time = end_time - start_time
+            
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    
+                    # Validate expected fields
+                    missing_fields = []
+                    for field in test_case['expected_fields']:
+                        if field not in data:
+                            missing_fields.append(field)
+                    
+                    return {
+                        'test_name': test_case['name'],
+                        'success': len(missing_fields) == 0,
+                        'response_time': response_time,
+                        'status_code': response.status_code,
+                        'parsed_response': data,
+                        'missing_fields': missing_fields,
+                        'stress_test': test_case.get('stress_test', False)
+                    }
+                    
+                except json.JSONDecodeError as e:
+                    return {
+                        'test_name': test_case['name'],
+                        'success': False,
+                        'response_time': response_time,
+                        'error': f"JSON parsing failed: {str(e)}",
+                        'raw_response': response.text[:500]
+                    }
+            else:
+                return {
+                    'test_name': test_case['name'],
+                    'success': False,
+                    'response_time': response_time,
+                    'error': f"HTTP {response.status_code}: {response.text[:200]}"
+                }
+                
+        except Exception as e:
+            end_time = time.time()
+            return {
+                'test_name': test_case['name'],
+                'success': False,
+                'response_time': end_time - start_time,
+                'error': str(e)
+            }
+    
+    def _categorize_model_size(self, model_name: str) -> str:
+        """Categorize model by size for analysis"""
+        name_lower = model_name.lower()
+        if '1b' in name_lower:
+            return 'tiny'
+        elif '3b' in name_lower:
+            return 'small'
+        elif any(x in name_lower for x in ['7b', '8b']):
+            return 'medium'
+        elif any(x in name_lower for x in ['13b', '14b']):
+            return 'large'
+        elif any(x in name_lower for x in ['20b', '22b']):
+            return 'xlarge'
+        elif any(x in name_lower for x in ['34b', '35b']):
+            return 'xxlarge'
+        else:
+            return 'unknown'
+    
+    def _save_escalation_results(self, model_name: str, results: Dict[str, Any]):
+        """Save results to centralized escalation testing logs"""
+        # Create standardized filename with timestamp and hostname
+        hostname = platform.node().lower().replace('.', '-')
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"escalation_{hostname}_{model_name.replace(':', '_')}_{timestamp}.json"
+        
+        filepath = self.results_dir / filename
+        
+        # Add machine context
+        enhanced_results = {
+            'machine_hostname': platform.node(),
+            'test_timestamp': datetime.now().isoformat(),
+            'model_name': model_name,
+            'roadnerd_base_url': self.roadnerd_base,
+            'workflow_results': results
+        }
+        
+        with open(filepath, 'w') as f:
+            json.dump(enhanced_results, f, indent=2)
+        
+        print(f"📊 Escalation results saved: {filepath}")
+        
+        # Also append to daily summary log
+        daily_log = self.results_dir / f"daily_summary_{datetime.now().strftime('%Y%m%d')}.jsonl"
+        summary_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'hostname': hostname,
+            'model': model_name,
+            'success_rate': results['summary']['success_rate'],
+            'n_idea_success': results['summary']['n_idea_generation_success'],
+            'avg_response_time': results['summary']['avg_response_time'],
+            'model_category': results['summary']['model_size_category'],
+            'production_ready': results['summary']['recommended_for_production']
+        }
+        
+        with open(daily_log, 'a') as f:
+            f.write(json.dumps(summary_entry) + '\n')
 
 class ModelManager:
     def __init__(self, cache_dir: str = None):
@@ -520,7 +746,10 @@ def main():
     parser.add_argument('--update', action='store_true', help='Update existing profile')
     parser.add_argument('--test-llm', action='store_true', help='Run LLM benchmarks')
     parser.add_argument('--benchmark', action='store_true', help='Run comprehensive benchmarks')
+    parser.add_argument('--test-workflows', action='store_true', help='Test RoadNerd workflow endpoints with challenging tasks')
+    parser.add_argument('--escalation-test', action='store_true', help='Run full escalation ladder with workflow tests')
     parser.add_argument('--models', default='available', help='Models to test (available/all/model-name)')
+    parser.add_argument('--roadnerd-url', default='http://localhost:8080', help='RoadNerd server URL for workflow tests')
     parser.add_argument('--export', help='Export profile for patient deployment')
     parser.add_argument('--cache-models', action='store_true', help='Cache Ollama models for bootstrapping')
     parser.add_argument('--profile-name', help='Specific profile name to use')
@@ -545,9 +774,9 @@ def main():
             print(f"Profile {profile_name} not found, creating new one...")
             profile = profiler.create_profile(profile_name)
             
-        if args.test_llm or args.benchmark:
+        if args.test_llm or args.benchmark or args.test_workflows or args.escalation_test:
             print("🧠 Starting LLM benchmarks...")
-            benchmark = LLMBenchmark()
+            benchmark = LLMBenchmark(roadnerd_base=args.roadnerd_url)
             
             if args.models == 'available':
                 models = benchmark.get_available_models()
@@ -555,17 +784,48 @@ def main():
             elif args.models == 'all':
                 # Test escalation ladder
                 model_names = ['llama3.2:1b', 'llama3.2:3b', 'llama3.2:7b', 'llama3.1:8b-instruct']
+            elif args.escalation_test:
+                # Full escalation ladder including GPT-OSS 20B
+                model_names = ['llama3.2:1b', 'llama3.2:3b', 'llama3:8b', 'codellama:13b', 'gpt-oss:20b']
             else:
                 model_names = [args.models]
-                
-            test_prompts = benchmark.get_standard_test_prompts()
             
-            for model_name in model_names:
-                print(f"🎯 Testing {model_name}...")
-                results = benchmark.test_model_performance(model_name, test_prompts)
+            # Run traditional LLM benchmarks if requested
+            if args.test_llm or args.benchmark:
+                test_prompts = benchmark.get_standard_test_prompts()
                 
-                profile['llm_benchmarks'][model_name] = results
-                print(f"✅ {model_name}: {results['summary'].get('success_rate', 0):.1%} success rate")
+                for model_name in model_names:
+                    print(f"🎯 Testing {model_name} (traditional benchmarks)...")
+                    results = benchmark.test_model_performance(model_name, test_prompts)
+                    
+                    profile['llm_benchmarks'][model_name] = results
+                    print(f"✅ {model_name}: {results['summary'].get('success_rate', 0):.1%} success rate")
+            
+            # Run RoadNerd workflow tests if requested
+            if args.test_workflows or args.escalation_test:
+                print("🔬 Starting RoadNerd workflow tests...")
+                
+                for model_name in model_names:
+                    print(f"🎯 Testing {model_name} (RoadNerd workflows)...")
+                    
+                    # Start server with this model for testing
+                    print(f"   📡 Switching to model {model_name}...")
+                    
+                    workflow_results = benchmark.test_roadnerd_workflow(model_name)
+                    
+                    # Store in profile
+                    if 'roadnerd_workflow_tests' not in profile:
+                        profile['roadnerd_workflow_tests'] = {}
+                    profile['roadnerd_workflow_tests'][model_name] = workflow_results
+                    
+                    # Print summary
+                    summary = workflow_results['summary']
+                    print(f"✅ {model_name} workflow results:")
+                    print(f"   • Success rate: {summary['success_rate']:.1%}")
+                    print(f"   • N-idea generation: {'✅' if summary['n_idea_generation_success'] else '❌'}")
+                    print(f"   • Avg response time: {summary['avg_response_time']:.1f}s")
+                    print(f"   • Production ready: {'✅' if summary['recommended_for_production'] else '❌'}")
+                    print()
                 
         # Save updated profile
         profiler.save_profile(profile)
