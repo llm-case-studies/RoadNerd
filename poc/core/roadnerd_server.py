@@ -37,6 +37,7 @@ except Exception:
 
 # Import modular components
 from modules.system_diagnostics import SystemDiagnostics
+from modules.command_executor import CommandExecutor
 
 # Configuration
 CONFIG = {
@@ -253,71 +254,6 @@ def _render_template(tpl: str, ctx: Dict[str, str]) -> str:
     return out
 
 
-class CommandExecutor:
-    """Safely execute system commands"""
-    
-    @staticmethod
-    def analyze_command(cmd: str) -> Dict:
-        """Analyze a command for safety"""
-        dangerous_patterns = ['rm -rf', 'dd if=', 'mkfs', '> /dev/', 'format']
-        
-        risk_level = 'low'
-        warnings = []
-        
-        for pattern in dangerous_patterns:
-            if pattern in cmd.lower():
-                risk_level = 'high'
-                warnings.append(f"Contains dangerous pattern: {pattern}")
-        
-        if 'sudo' in cmd:
-            risk_level = 'medium' if risk_level == 'low' else 'high'
-            warnings.append("Requires elevated privileges")
-        
-        return {
-            'command': cmd,
-            'risk_level': risk_level,
-            'warnings': warnings,
-            'requires_sudo': 'sudo' in cmd
-        }
-    
-    @staticmethod
-    def execute_safely(cmd: str) -> Dict:
-        """Execute command with safety checks"""
-        analysis = CommandExecutor.analyze_command(cmd)
-        
-        if analysis['risk_level'] == 'high' and CONFIG['safe_mode']:
-            return {
-                'executed': False,
-                'output': 'Command blocked in safe mode',
-                'analysis': analysis
-            }
-        
-        try:
-            result = subprocess.run(
-                cmd, 
-                shell=True, 
-                capture_output=True, 
-                text=True, 
-                timeout=30
-            )
-            return {
-                'executed': True,
-                'output': result.stdout or result.stderr,
-                'return_code': result.returncode,
-                'analysis': analysis
-            }
-        except subprocess.TimeoutExpired:
-            return {
-                'executed': False,
-                'output': 'Command timed out',
-                'analysis': analysis
-            }
-        except Exception as e:
-            return {
-                'executed': False,
-                'output': str(e),
-                'analysis': analysis
-            }
 
 # Flask Routes
 
@@ -1538,7 +1474,7 @@ def api_execute():
             return jsonify({'executed': False, 'error': 'Force execution disabled. Set RN_ALLOW_FORCE=1 to enable explicitly.'}), 403
         CONFIG['safe_mode'] = False
     
-    result = CommandExecutor.execute_safely(command)
+    result = CommandExecutor.execute_safely(command, safe_mode=CONFIG['safe_mode'])
     
     # Restore safe mode
     CONFIG['safe_mode'] = original_safe_mode
