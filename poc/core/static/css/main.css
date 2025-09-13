@@ -1,0 +1,10 @@
+:root{--bg:#0b1220;--fg:#e0e6f0;--panel:#111827;--panel-border:#1f2937;--accent:#2563eb}
+*{box-sizing:border-box} body{margin:0;padding:20px;background:var(--bg);color:var(--fg);font-family:system-ui,ui-sans-serif,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
+.container{max-width:960px;margin:0 auto}
+h1,h2{margin:0 0 10px}
+section.status{background:var(--panel);border:1px solid var(--panel-border);border-radius:8px;padding:16px;margin:16px 0}
+.endpoint{margin:6px 0;padding:6px;background:#0b1220;border:1px solid var(--panel-border);border-radius:6px}
+a{color:#7cf}
+.progress{background:#e5e7eb;border-radius:8px;overflow:hidden;height:16px}
+.progress .bar{background:#10b981;height:100%;transition:width .3s}
+

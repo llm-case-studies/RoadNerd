@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+{% block content %}
+  <h1>RoadNerd API Console</h1>
+  <section>
+    <h2>Token (optional)</h2>
+    <label>Authorization: Bearer <input id="token" placeholder="token for gated endpoints"/></label>
+  </section>
+  <section>
+    <h2>GET /api/status</h2>
+    <button id="btnStatus">Call</button>
+    <pre id="statusOut"></pre>
+  </section>
+  <section>
+    <h2>POST /api/diagnose</h2>
+    <label>Issue</label>
+    <textarea id="issue" rows="4">My WiFi is not working</textarea>
+    <label><input id="diagDebug" type="checkbox"/> Debug</label>
+    <button id="btnDiagnose">Diagnose</button>
+    <pre id="diagOut"></pre>
+  </section>
+  <section>
+    <h2>POST /api/execute</h2>
+    <label>Command</label>
+    <input id="cmd" value="whoami"/>
+    <label><input id="force" type="checkbox"/> Force (override safe mode)</label>
+    <button id="btnExecute">Execute</button>
+    <pre id="execOut"></pre>
+  </section>
+  <section>
+    <h2>POST /api/ideas/brainstorm</h2>
+    <label>Issue</label>
+    <textarea id="issueIdeas" rows="3">DNS resolution is failing on Ubuntu.</textarea>
+    <label>N ideas</label>
+    <input id="nIdeas" value="5"/>
+    <label>Creativity (0-3)</label>
+    <input id="creativity" value="2"/>
+    <label><input id="brainDebug" type="checkbox"/> Debug</label>
+    <button id="btnBrainstorm">Brainstorm</button>
+    <pre id="brainOut"></pre>
+  </section>
+  <section>
+    <h2>POST /api/ideas/probe</h2>
+    <label>Ideas JSON (array)</label>
+    <textarea id="ideasJSON" rows="5">[{"hypothesis":"DNS misconfiguration","category":"dns","why":"resolv.conf wrong","checks":["cat /etc/resolv.conf","dig example.com"]}]</textarea>
+    <label><input id="runChecks" type="checkbox" checked/> Run checks</label>
+    <button id="btnProbe">Probe</button>
+    <pre id="probeOut"></pre>
+  </section>
+  <section>
+    <h2>POST /api/ideas/judge</h2>
+    <label>Issue</label>
+    <input id="issueJudge" value="DNS resolution is failing"/>
+    <label>Ideas JSON (array)</label>
+    <textarea id="ideasJudge" rows="5">[{"hypothesis":"DNS misconfiguration","category":"dns","why":"resolv.conf wrong","checks":["cat /etc/resolv.conf"],"fixes":["sudo systemctl restart systemd-resolved"],"risk":"low"}]</textarea>
+    <button id="btnJudge">Judge</button>
+    <pre id="judgeOut"></pre>
+  </section>
+  <section>
+    <h2>POST /api/llm</h2>
+    <label>Prompt</label>
+    <textarea id="prompt" rows="3">What version of Ubuntu am I running?</textarea>
+    <button id="btnLLM">Ask</button>
+    <pre id="llmOut"></pre>
+  </section>
+  <section>
+    <h2>Standard Profiling Suite</h2>
+    <button id="btnLoadPresets">📋 Load Test Issue Presets</button>
+    <button id="btnRunProfile" style="background: #059669; margin-left: 10px;">🧪 Run Standard Profile</button>
+    <br><br>
+    <label>Test Categories:</label>
+    <select id="presetCategory" style="width: 200px; margin: 5px;"></select>
+    <br>
+    <label>Select Test Issue:</label>
+    <select id="presetIssue" style="width: 100%; margin: 5px 0;"></select>
+    <pre id="presetOut">Standard profiling will test N-idea generation across multiple models with predefined diagnostic scenarios</pre>
+  </section>
+  <section>
+    <h2>Model Switching</h2>
+    <button id="btnGetModel">🔄 List Available Models</button>
+    <br><br>
+    <label>Select Model:</label>
+    <select id="modelSelect" style="width: 300px; margin: 5px 0;"></select>
+    <br>
+    <label>Or enter manually:</label>
+    <input id="newModel" placeholder="e.g., llama3.2:3b or gpt-oss:20b" style="width: 300px;"/>
+    <br><br>
+    <button id="btnSetModel" style="background: #007acc; color: white; padding: 8px 16px;">🔄 Switch Model</button>
+    <pre id="modelOut">Click "List Available Models" to see all models</pre>
+  </section>
+  <section>
+    <h2>🚀 Bundle Management</h2>
+    <p>Open <a href="/bundle-ui">/bundle-ui</a> for the dedicated bundle interface.</p>
+  </section>
+  <script src="{{ url_for('static', filename='js/api-console.js', v=asset_ver) }}" defer></script>
+{% endblock %}
+

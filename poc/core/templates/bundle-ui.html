@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block head %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/bundle-ui.css', v=asset_ver) }}" />
+{% endblock %}
+{% block content %}
+  <h1>📦 Bundle Management</h1>
+  <p>This is a scaffold for the dedicated Bundle UI. Functionality mirrors the inline UI under /api-docs.</p>
+  <div>
+    <button id="scanBtn">📱 Scan Storage Devices</button>
+  </div>
+  <div id="storageList" class="status" style="margin-top: 10px;"></div>
+  <div style="margin: 15px 0;">
+    <label>Target Path:</label>
+    <input id="targetPath" placeholder="e.g., /media/usb/roadnerd-bundle" style="width: 360px;"/>
+    <label style="margin-left: 10px;"><input type="checkbox" id="includeDeps" checked/> Include Dependencies</label>
+    <label style="margin-left: 10px;"><input type="checkbox" id="includeModels"/> Include Models</label>
+    <button id="createBtn" style="margin-left: 10px;">🚀 Create Bundle</button>
+  </div>
+  <div id="bundleProgress" style="display:none;">
+    <h3>Progress</h3>
+    <div class="progress">
+      <div id="progressBar" class="bar" style="width: 0%;"></div>
+    </div>
+    <p id="progressText">Starting...</p>
+  </div>
+  <pre id="bundleOut">(waiting)</pre>
+  <script src="{{ url_for('static', filename='js/bundle-ui.js', v=asset_ver) }}" defer></script>
+{% endblock %}
+

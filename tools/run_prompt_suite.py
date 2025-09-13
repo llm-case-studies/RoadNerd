@@ -22,8 +22,13 @@ def load_cases(path: Path):
 
 
 def ensure_log_path() -> Path:
-    repo_root = Path(__file__).resolve().parents[1]
-    out_dir = repo_root / 'logs' / 'llm_runs'
+    # Prefer RN_LOG_DIR if set
+    env = os.environ.get('RN_LOG_DIR')
+    if env:
+        out_dir = Path(env) / 'llm_runs'
+    else:
+        repo_root = Path(__file__).resolve().parents[1]
+        out_dir = repo_root / 'logs' / 'llm_runs'
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir / (datetime.now().strftime('%Y%m%d') + '.jsonl')
 

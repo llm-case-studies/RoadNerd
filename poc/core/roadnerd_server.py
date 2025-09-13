@@ -18,15 +18,35 @@ from pathlib import Path
 
 # Imports (do not auto-install; fail with guidance)
 try:
-    from flask import Flask, request, jsonify, render_template_string, send_file, make_response
+    from flask import Flask, request, jsonify, render_template_string, render_template, send_file, make_response
     from flask_cors import CORS
 except ImportError:
     print("Missing dependencies for RoadNerd server: flask, flask-cors")
     print("Activate your venv (RN_VENV) and run: pip install flask flask-cors")
     sys.exit(1)
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', template_folder='templates')
 CORS(app)  # Allow cross-origin requests
+
+# Static asset version (for cache busting)
+try:
+    app.config['ASSET_VER'] = os.getenv('RN_ASSET_VER') or datetime.now().strftime('%Y%m%d%H%M%S')
+except Exception:
+    app.config['ASSET_VER'] = '0'
+
+
+@app.after_request
+def _add_security_headers(resp):
+    """Add CSP and basic security headers for HTML pages."""
+    try:
+        csp = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'"
+        resp.headers.setdefault('Content-Security-Policy', csp)
+        resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        resp.headers.setdefault('X-Frame-Options', 'DENY')
+        resp.headers.setdefault('Referrer-Policy', 'no-referrer')
+    except Exception:
+        pass
+    return resp
 
 # Ensure local imports (classify.py, retrieval.py) resolve when running as a script
 try:
@@ -196,6 +216,14 @@ import uuid
 @app.route('/')
 def home():
     """Serve a simple web interface"""
+    # Presentation extracted: render template with static JS/CSS
+    # The inline HTML below is kept temporarily for reference and will be removed
+    # once Phase 2A extraction completes across all routes.
+    try:
+        return render_template('home.html', asset_ver=app.config.get('ASSET_VER', '0'))
+    except Exception:
+        # Fallback to legacy inline HTML if templates are not available
+        pass
     html = '''
     <!DOCTYPE html>
     <html>
@@ -634,6 +662,12 @@ def api_status():
 @app.route('/api-docs', methods=['GET'])
 def api_docs():
     """Lightweight API console for browser testing"""
+    # Presentation extracted: serve Jinja template with external JS/CSS (no inline scripts)
+    try:
+        return render_template('api_console.html', asset_ver=app.config.get('ASSET_VER', '0'))
+    except Exception:
+        # Fallback to legacy inline console if templates are not available
+        pass
     html = '''
     <!DOCTYPE html>
     <html>
@@ -747,6 +781,40 @@ def api_docs():
         <button onclick="setModel()" style="background: #007acc; color: white; padding: 8px 16px;">🔄 Switch Model</button>
         <pre id="modelOut">Click "List Available Models" to see all models</pre>
       </section>
+      
+      <section>
+        <h2>🚀 Bundle Management</h2>
+        <p>Create portable RoadNerd bundles for deployment on offline systems</p>
+        <button onclick="scanStorage()" style="background: #28a745; color: white; padding: 8px 16px;">📱 Scan Storage Devices</button>
+        <div id="storageList" style="margin: 10px 0;"></div>
+        
+        <div style="margin: 15px 0;">
+          <h4>Bundle Options:</h4>
+          <label style="display: block; margin: 5px 0;">
+            <input type="checkbox" id="includeDeps" checked> 📦 Include Dependencies (Offline Mode) - 62MB
+          </label>
+          <label style="display: block; margin: 5px 0;">
+            <input type="checkbox" id="includeModels"> 🧠 Include LLM Models (~5GB)
+          </label>
+        </div>
+        
+        <div style="margin: 15px 0;">
+          <label>Target Path:</label><br>
+          <input id="targetPath" placeholder="e.g., /media/usb/roadnerd-bundle" style="width: 400px; margin: 5px 0;"/>
+          <button onclick="createBundle()" style="background: #ff6b35; color: white; padding: 8px 16px;">🚀 Create Bundle</button>
+        </div>
+        
+        <div id="bundleProgress" style="display: none; margin: 15px 0;">
+          <h4>Bundle Creation Progress:</h4>
+          <div style="background: #f0f0f0; border-radius: 10px; padding: 3px;">
+            <div id="progressBar" style="background: #28a745; height: 20px; border-radius: 8px; width: 0%; transition: width 0.3s;"></div>
+          </div>
+          <p id="progressText">Starting...</p>
+        </div>
+        
+        <pre id="bundleOut">Click "Scan Storage Devices" to detect USB drives and storage</pre>
+      </section>
+      
       <script>
         function j(o){ return JSON.stringify(o, null, 2); }
         function headers(){
@@ -925,11 +993,111 @@ def api_docs():
             document.getElementById('presetOut').textContent = 'Error: ' + e.message;
           }
         }
+        
+        // Bundle Management Functions
+        async function scanStorage() {
+          document.getElementById('bundleOut').textContent = '📱 Scanning for storage devices...';
+          try {
+            const r = await fetch('/api/bundle/storage/scan', {method: 'GET', headers: headers()});
+            const data = await r.json();
+            
+            if (data.drives && data.drives.length > 0) {
+              let html = '<h4>Available Storage Devices:</h4>';
+              data.drives.forEach(drive => {
+                const mountPath = drive.mountpoint !== 'Not mounted' ? drive.mountpoint : 'Not mounted';
+                const suggestedPath = drive.mountpoint !== 'Not mounted' ? drive.mountpoint + '/roadnerd-bundle' : '/tmp/roadnerd-bundle';
+                html += `
+                  <div style="border: 1px solid #ddd; padding: 10px; margin: 5px 0; border-radius: 5px;">
+                    <strong>📱 ${drive.name}</strong> - ${drive.size} (${drive.type})
+                    <br>Mount: <code>${mountPath}</code>
+                    <br><button onclick="selectStorage('${suggestedPath}')" style="background: #28a745; color: white; padding: 4px 8px; margin-top: 5px;">Use This Drive</button>
+                  </div>`;
+              });
+              document.getElementById('storageList').innerHTML = html;
+              document.getElementById('bundleOut').textContent = j(data);
+            } else {
+              document.getElementById('storageList').innerHTML = '<p style="color: orange;">No removable storage devices detected. You can still create bundles in any directory.</p>';
+              document.getElementById('bundleOut').textContent = 'No USB drives found. Check raw output in the result above.';
+            }
+          } catch (e) {
+            document.getElementById('bundleOut').textContent = 'Error scanning storage: ' + e.message;
+          }
+        }
+        
+        function selectStorage(path) {
+          document.getElementById('targetPath').value = path;
+        }
+        
+        async function createBundle() {
+          const targetPath = document.getElementById('targetPath').value;
+          const includeDeps = document.getElementById('includeDeps').checked;
+          const includeModels = document.getElementById('includeModels').checked;
+          
+          if (!targetPath) {
+            alert('Please specify a target path for the bundle');
+            return;
+          }
+          
+          document.getElementById('bundleOut').textContent = '🚀 Starting bundle creation...';
+          document.getElementById('bundleProgress').style.display = 'block';
+          
+          try {
+            const r = await fetch('/api/bundle/create', {
+              method: 'POST',
+              headers: headers(),
+              body: JSON.stringify({
+                target_path: targetPath,
+                include_deps: includeDeps,
+                include_models: includeModels
+              })
+            });
+            const data = await r.json();
+            
+            if (data.status === 'started') {
+              document.getElementById('bundleOut').textContent = '✅ Bundle creation started! Monitoring progress...';
+              monitorBundleProgress();
+            } else {
+              document.getElementById('bundleOut').textContent = 'Error: ' + (data.error || 'Failed to start bundle creation');
+              document.getElementById('bundleProgress').style.display = 'none';
+            }
+          } catch (e) {
+            document.getElementById('bundleOut').textContent = 'Error: ' + e.message;
+            document.getElementById('bundleProgress').style.display = 'none';
+          }
+        }
+        
+        async function monitorBundleProgress() {
+          try {
+            const r = await fetch('/api/bundle/status', {method: 'GET', headers: headers()});
+            const data = await r.json();
+            
+            document.getElementById('progressBar').style.width = data.progress + '%';
+            document.getElementById('progressText').textContent = data.message;
+            
+            if (data.status === 'running') {
+              setTimeout(monitorBundleProgress, 1000); // Check every second
+            } else if (data.status === 'completed') {
+              document.getElementById('bundleOut').textContent = '🎉 Bundle creation completed successfully!\n\n' + data.message;
+              document.getElementById('progressText').textContent = '✅ Complete! Ready for deployment.';
+            } else if (data.status === 'failed') {
+              document.getElementById('bundleOut').textContent = '❌ Bundle creation failed: ' + data.message;
+              document.getElementById('progressText').textContent = '❌ Failed';
+            }
+          } catch (e) {
+            document.getElementById('bundleOut').textContent = 'Error monitoring progress: ' + e.message;
+          }
+        }
       </script>
     </body>
     </html>
     '''
     return render_template_string(html)
+
+
+@app.route('/bundle-ui', methods=['GET'])
+def bundle_ui():
+    """Separate Bundle Management UI (scaffold)."""
+    return render_template('bundle-ui.html', asset_ver=app.config.get('ASSET_VER', '0'))
 
 
 # =====================================================================
@@ -1494,6 +1662,141 @@ def start_llm_backend():
     elif CONFIG['llm_backend'] == 'llamafile':
         print("Please start llamafile manually:")
         print(f"  ./llamafile --server --nobrowser")
+
+
+# Bundle management endpoints
+@app.route('/api/bundle/storage/scan', methods=['GET'])
+def api_bundle_scan_storage():
+    """Scan for available USB drives and storage devices"""
+    try:
+        # Get mounted drives
+        result = subprocess.run(['df', '-h'], capture_output=True, text=True)
+        df_output = result.stdout
+        
+        # Get lsblk info for better device detection (use default columns)
+        lsblk_result = subprocess.run(['lsblk'], capture_output=True, text=True)
+        lsblk_output = lsblk_result.stdout
+        
+        # Parse for external storage devices (USB, external drives)
+        drives = []
+        for line in lsblk_output.split('\n')[1:]:  # Skip header
+            if line.strip():
+                parts = line.split()
+                if len(parts) >= 7:  # NAME MAJ:MIN RM SIZE RO TYPE MOUNTPOINTS
+                    name = parts[0]
+                    rm = parts[2]  # RM column (removable flag)
+                    size = parts[3]
+                    device_type = parts[5]
+                    mountpoint = parts[6] if len(parts) > 6 and parts[6] != '' else 'Not mounted'
+                    
+                    # Detect external storage: USB drives (sd*), removable devices, or mounted external paths
+                    is_external = (
+                        rm == '1' or  # Removable flag set
+                        name.startswith('sd') or  # SCSI disk (often USB)
+                        (mountpoint.startswith('/media/') or mountpoint.startswith('/mnt/'))  # External mount points
+                    )
+                    
+                    if is_external and device_type in ['disk', 'part'] and mountpoint != 'Not mounted':
+                        drives.append({
+                            'name': name,
+                            'size': size,
+                            'mountpoint': mountpoint,
+                            'type': device_type,
+                            'removable': rm == '1'
+                        })
+        
+        return jsonify({
+            'drives': drives,
+            'df_output': df_output,
+            'lsblk_output': lsblk_output
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/bundle/create', methods=['POST'])
+def api_bundle_create():
+    """Create a bundle on specified storage device"""
+    data = request.get_json() or {}
+    target_path = data.get('target_path')
+    include_models = data.get('include_models', False)
+    include_deps = data.get('include_deps', True)  # Default to offline mode
+    
+    if not target_path:
+        return jsonify({'error': 'target_path required'}), 400
+    
+    # Validate target path exists and is writable
+    if not os.path.exists(os.path.dirname(target_path)):
+        return jsonify({'error': 'Target directory does not exist'}), 400
+    
+    try:
+        # Build command
+        script_path = os.path.join(os.path.dirname(__file__), '..', '..', 'tools', 'make_portable_bundle.sh')
+        cmd = ['bash', script_path]
+        
+        if include_models:
+            cmd.append('--include-models')
+        if include_deps:
+            cmd.append('--include-deps')
+        cmd.append(target_path)
+        
+        # Start bundle creation in background
+        import threading
+        bundle_status = {'status': 'starting', 'progress': 0, 'message': 'Initializing bundle creation...'}
+        
+        def run_bundle_creation():
+            try:
+                bundle_status['status'] = 'running'
+                bundle_status['message'] = 'Creating bundle...'
+                bundle_status['progress'] = 10
+                
+                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                
+                while True:
+                    output = process.stdout.readline()
+                    if output == '' and process.poll() is not None:
+                        break
+                    if output:
+                        bundle_status['message'] = output.strip()
+                        # Estimate progress based on output
+                        if 'Copying' in output:
+                            bundle_status['progress'] = min(bundle_status['progress'] + 5, 60)
+                        elif 'Downloading dependencies' in output:
+                            bundle_status['progress'] = 70
+                        elif 'Creating' in output and 'tarball' in output:
+                            bundle_status['progress'] = 90
+                
+                if process.returncode == 0:
+                    bundle_status['status'] = 'completed'
+                    bundle_status['progress'] = 100
+                    bundle_status['message'] = f'Bundle created successfully at {target_path}'
+                else:
+                    bundle_status['status'] = 'failed'
+                    bundle_status['message'] = 'Bundle creation failed'
+                    
+            except Exception as e:
+                bundle_status['status'] = 'failed'
+                bundle_status['message'] = f'Error: {str(e)}'
+        
+        # Store status globally (in production, use Redis or similar)
+        app.bundle_status = bundle_status
+        
+        thread = threading.Thread(target=run_bundle_creation)
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({'status': 'started', 'message': 'Bundle creation started'})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/bundle/status', methods=['GET'])
+def api_bundle_status():
+    """Get current bundle creation status"""
+    status = getattr(app, 'bundle_status', {'status': 'none', 'progress': 0, 'message': 'No bundle creation in progress'})
+    return jsonify(status)
+
 
 if __name__ == '__main__':
     print("""

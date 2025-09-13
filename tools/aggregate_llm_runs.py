@@ -7,6 +7,7 @@ Usage:
 """
 import argparse
 import json
+import os
 from pathlib import Path
 from collections import defaultdict, Counter
 
@@ -28,7 +29,12 @@ def main():
     ap.add_argument('--date', help='YYYYMMDD file; default: latest file')
     args = ap.parse_args()
 
-    logs_dir = Path(__file__).resolve().parents[1] / 'logs' / 'llm_runs'
+    # Prefer RN_LOG_DIR if set; otherwise use repo logs/llm_runs
+    env = os.environ.get('RN_LOG_DIR')
+    if env:
+        logs_dir = Path(env) / 'llm_runs'
+    else:
+        logs_dir = Path(__file__).resolve().parents[1] / 'logs' / 'llm_runs'
     files = sorted(logs_dir.glob('*.jsonl'))
     if not files:
         print('No logs found in', logs_dir)
@@ -80,4 +86,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
