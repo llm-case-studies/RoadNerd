@@ -65,6 +65,8 @@ Key Developer Utilities
 - Aggregator: `python3 RoadNerd/tools/aggregate_llm_runs.py`
 - Classifier test: `python3 RoadNerd/tools/test_classifier.py "My WiFi is not working"`
 - Retrieval test: `python3 RoadNerd/tools/test_retrieval.py --query "dns failing" --category dns`
+- End‑to‑end runner: `BASE_URL=http://localhost:8080 CLS_URL=http://127.0.0.1:7080 RN_LOG_DIR=$HOME/.roadnerd/logs bash RoadNerd/run-all.sh`
+  (Runs prompt suite → aggregates logs → disambiguation → scans logs via Code‑Log‑Search MCP; writes a report under `$RN_LOG_DIR/e2e/`)
 
 ## Real-World Testing
 

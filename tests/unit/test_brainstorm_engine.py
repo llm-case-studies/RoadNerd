@@ -17,11 +17,13 @@ from unittest.mock import patch, MagicMock
 import sys
 from pathlib import Path
 
-# Add poc/core to path to import roadnerd_server  
+# Add poc/core to path to import modules  
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'poc' / 'core'))
 
+from modules.brainstorm_engine import BrainstormEngine, Idea
+from modules.llm_interface import LLMInterface
 import roadnerd_server
-from roadnerd_server import BrainstormEngine, LLMInterface, Idea, CONFIG
+from roadnerd_server import CONFIG
 
 
 class TestBrainstormEngine:
@@ -51,11 +53,15 @@ class TestBrainstormEngine:
             "risk": "low"
         })
         
-        with patch.object(LLMInterface, 'get_response', return_value=mock_llm_response), \
-             patch('roadnerd_server.SystemDiagnostics.get_system_info', return_value={}), \
-             patch('roadnerd_server.SystemDiagnostics.check_connectivity', return_value={}):
+        # Create mock LLM interface
+        mock_llm = MagicMock(spec=LLMInterface)
+        mock_llm.get_response.return_value = mock_llm_response
+        
+        with patch('modules.system_diagnostics.SystemDiagnostics.get_system_info', return_value={}), \
+             patch('modules.system_diagnostics.SystemDiagnostics.check_connectivity', return_value={}):
             
-            ideas = BrainstormEngine.generate_ideas("WiFi not working", n=1)
+            engine = BrainstormEngine(mock_llm)
+            ideas = engine.generate_ideas("WiFi not working", n=1)
             
             assert len(ideas) == 1
             idea = ideas[0]
@@ -82,11 +88,14 @@ class TestBrainstormEngine:
         
         mock_llm_response = json.dumps(mock_ideas)
         
-        with patch.object(LLMInterface, 'get_response', return_value=mock_llm_response), \
-             patch('roadnerd_server.SystemDiagnostics.get_system_info', return_value={}), \
-             patch('roadnerd_server.SystemDiagnostics.check_connectivity', return_value={}):
+        mock_llm = MagicMock(spec=LLMInterface)
+        mock_llm.get_response.return_value = mock_llm_response
+        
+        with patch('modules.system_diagnostics.SystemDiagnostics.get_system_info', return_value={}), \
+             patch('modules.system_diagnostics.SystemDiagnostics.check_connectivity', return_value={}):
             
-            ideas = BrainstormEngine.generate_ideas("Complex network issue", n=5, creativity=2)
+            engine = BrainstormEngine(mock_llm)
+            ideas = engine.generate_ideas("Complex network issue", n=5, creativity=2)
             
             # Should return exactly 5 ideas
             assert len(ideas) == 5
@@ -99,8 +108,8 @@ class TestBrainstormEngine:
                 assert len(idea.fixes) >= 1
             
             # Verify creativity parameter affects LLM call
-            LLMInterface.get_response.assert_called_once()
-            call_kwargs = LLMInterface.get_response.call_args[1]
+            mock_llm.get_response.assert_called_once()
+            call_kwargs = mock_llm.get_response.call_args[1]
             assert call_kwargs['temperature'] == 0.7  # Creativity 2 = temperature 0.7
             assert call_kwargs['num_predict'] == max(512, 5 * 120)  # Dynamic token allocation
 
@@ -109,11 +118,14 @@ class TestBrainstormEngine:
         # Mock LLM returning unparseable response 
         mock_llm_response = "This is not valid JSON and cannot be parsed properly."
         
-        with patch.object(LLMInterface, 'get_response', return_value=mock_llm_response), \
-             patch('roadnerd_server.SystemDiagnostics.get_system_info', return_value={}), \
-             patch('roadnerd_server.SystemDiagnostics.check_connectivity', return_value={}):
+        mock_llm = MagicMock(spec=LLMInterface)
+        mock_llm.get_response.return_value = mock_llm_response
+        
+        with patch('modules.system_diagnostics.SystemDiagnostics.get_system_info', return_value={}), \
+             patch('modules.system_diagnostics.SystemDiagnostics.check_connectivity', return_value={}):
             
-            ideas = BrainstormEngine.generate_ideas("Unparseable response test", n=3)
+            engine = BrainstormEngine(mock_llm)
+            ideas = engine.generate_ideas("Unparseable response test", n=3)
             
             # Should fall back to generic idea
             assert len(ideas) == 1  # Falls back to single generic idea
@@ -135,11 +147,14 @@ class TestBrainstormEngine:
 
 These should help diagnose the network issue.'''
         
-        with patch.object(LLMInterface, 'get_response', return_value=mock_llm_response), \
-             patch('roadnerd_server.SystemDiagnostics.get_system_info', return_value={}), \
-             patch('roadnerd_server.SystemDiagnostics.check_connectivity', return_value={}):
+        mock_llm = MagicMock(spec=LLMInterface)
+        mock_llm.get_response.return_value = mock_llm_response
+        
+        with patch('modules.system_diagnostics.SystemDiagnostics.get_system_info', return_value={}), \
+             patch('modules.system_diagnostics.SystemDiagnostics.check_connectivity', return_value={}):
             
-            ideas = BrainstormEngine.generate_ideas("Network connectivity issues", n=3)
+            engine = BrainstormEngine(mock_llm)
+            ideas = engine.generate_ideas("Network connectivity issues", n=3)
             
             # Should successfully parse all 3 numbered JSON objects
             assert len(ideas) == 3
@@ -181,11 +196,14 @@ These should help diagnose the network issue.'''
 
 This should help identify the performance issue.'''
         
-        with patch.object(LLMInterface, 'get_response', return_value=mock_llm_response), \
-             patch('roadnerd_server.SystemDiagnostics.get_system_info', return_value={}), \
-             patch('roadnerd_server.SystemDiagnostics.check_connectivity', return_value={}):
+        mock_llm = MagicMock(spec=LLMInterface)
+        mock_llm.get_response.return_value = mock_llm_response
+        
+        with patch('modules.system_diagnostics.SystemDiagnostics.get_system_info', return_value={}), \
+             patch('modules.system_diagnostics.SystemDiagnostics.check_connectivity', return_value={}):
             
-            ideas = BrainstormEngine.generate_ideas("System performance degrading", n=2)
+            engine = BrainstormEngine(mock_llm)
+            ideas = engine.generate_ideas("System performance degrading", n=2)
             
             # Should parse fenced JSON array  
             assert len(ideas) == 2
@@ -205,33 +223,39 @@ This should help identify the performance issue.'''
             "risk": "low"
         })
         
-        with patch.object(LLMInterface, 'get_response', return_value=mock_llm_response), \
-             patch('roadnerd_server.SystemDiagnostics.get_system_info', return_value={}), \
-             patch('roadnerd_server.SystemDiagnostics.check_connectivity', return_value={}):
+        with patch('modules.system_diagnostics.SystemDiagnostics.get_system_info', return_value={}), \
+             patch('modules.system_diagnostics.SystemDiagnostics.check_connectivity', return_value={}):
             
             # Test creativity level 0 (temperature 0.0)
-            BrainstormEngine.generate_ideas("Test issue", n=1, creativity=0)
-            call_kwargs = LLMInterface.get_response.call_args[1]
+            mock_llm = MagicMock(spec=LLMInterface)
+            mock_llm.get_response.return_value = mock_llm_response
+            engine = BrainstormEngine(mock_llm)
+            engine.generate_ideas("Test issue", n=1, creativity=0)
+            call_kwargs = mock_llm.get_response.call_args[1]
             assert call_kwargs['temperature'] == 0.0
             
             # Test creativity level 1 (temperature 0.3)  
-            BrainstormEngine.generate_ideas("Test issue", n=1, creativity=1)
-            call_kwargs = LLMInterface.get_response.call_args[1]
+            mock_llm.reset_mock()
+            engine.generate_ideas("Test issue", n=1, creativity=1)
+            call_kwargs = mock_llm.get_response.call_args[1]
             assert call_kwargs['temperature'] == 0.3
             
             # Test creativity level 2 (temperature 0.7)
-            BrainstormEngine.generate_ideas("Test issue", n=1, creativity=2)
-            call_kwargs = LLMInterface.get_response.call_args[1] 
+            mock_llm.reset_mock()
+            engine.generate_ideas("Test issue", n=1, creativity=2)
+            call_kwargs = mock_llm.get_response.call_args[1] 
             assert call_kwargs['temperature'] == 0.7
             
             # Test creativity level 3 (temperature 1.0)
-            BrainstormEngine.generate_ideas("Test issue", n=1, creativity=3)
-            call_kwargs = LLMInterface.get_response.call_args[1]
+            mock_llm.reset_mock()
+            engine.generate_ideas("Test issue", n=1, creativity=3)
+            call_kwargs = mock_llm.get_response.call_args[1]
             assert call_kwargs['temperature'] == 1.0
             
             # Test invalid creativity level (defaults to 0.3)
-            BrainstormEngine.generate_ideas("Test issue", n=1, creativity=5)
-            call_kwargs = LLMInterface.get_response.call_args[1]
+            mock_llm.reset_mock()
+            engine.generate_ideas("Test issue", n=1, creativity=5)
+            call_kwargs = mock_llm.get_response.call_args[1]
             assert call_kwargs['temperature'] == 0.3
 
     def test_dynamic_token_allocation(self):
@@ -245,23 +269,28 @@ This should help identify the performance issue.'''
             "risk": "low"
         })
         
-        with patch.object(LLMInterface, 'get_response', return_value=mock_llm_response), \
-             patch('roadnerd_server.SystemDiagnostics.get_system_info', return_value={}), \
-             patch('roadnerd_server.SystemDiagnostics.check_connectivity', return_value={}):
+        with patch('modules.system_diagnostics.SystemDiagnostics.get_system_info', return_value={}), \
+             patch('modules.system_diagnostics.SystemDiagnostics.check_connectivity', return_value={}):
+            
+            mock_llm = MagicMock(spec=LLMInterface)
+            mock_llm.get_response.return_value = mock_llm_response
+            engine = BrainstormEngine(mock_llm)
             
             # Test N=1: should use max(512, 1*120) = 512 tokens
-            BrainstormEngine.generate_ideas("Test", n=1)
-            call_kwargs = LLMInterface.get_response.call_args[1]
+            engine.generate_ideas("Test", n=1)
+            call_kwargs = mock_llm.get_response.call_args[1]
             assert call_kwargs['num_predict'] == 512
             
             # Test N=5: should use max(512, 5*120) = 600 tokens
-            BrainstormEngine.generate_ideas("Test", n=5)
-            call_kwargs = LLMInterface.get_response.call_args[1]
+            mock_llm.reset_mock()
+            engine.generate_ideas("Test", n=5)
+            call_kwargs = mock_llm.get_response.call_args[1]
             assert call_kwargs['num_predict'] == 600
             
             # Test N=10: should use max(512, 10*120) = 1200 tokens
-            BrainstormEngine.generate_ideas("Test", n=10)
-            call_kwargs = LLMInterface.get_response.call_args[1]
+            mock_llm.reset_mock()
+            engine.generate_ideas("Test", n=10)
+            call_kwargs = mock_llm.get_response.call_args[1]
             assert call_kwargs['num_predict'] == 1200
 
     def test_balanced_brace_parsing(self):
@@ -275,11 +304,14 @@ Another consideration is {"hypothesis": "Cable connection loose", "category": "p
 
 These are the most likely causes based on the symptoms described.'''
         
-        with patch.object(LLMInterface, 'get_response', return_value=mock_llm_response), \
-             patch('roadnerd_server.SystemDiagnostics.get_system_info', return_value={}), \
-             patch('roadnerd_server.SystemDiagnostics.check_connectivity', return_value={}):
+        mock_llm = MagicMock(spec=LLMInterface)
+        mock_llm.get_response.return_value = mock_llm_response
+        
+        with patch('modules.system_diagnostics.SystemDiagnostics.get_system_info', return_value={}), \
+             patch('modules.system_diagnostics.SystemDiagnostics.check_connectivity', return_value={}):
             
-            ideas = BrainstormEngine.generate_ideas("Mixed text parsing test", n=2)
+            engine = BrainstormEngine(mock_llm)
+            ideas = engine.generate_ideas("Mixed text parsing test", n=2)
             
             # Should extract both JSON objects from mixed text using balanced brace parsing
             assert len(ideas) == 2
@@ -301,12 +333,15 @@ These are the most likely causes based on the symptoms described.'''
             "risk": "low"
         })
         
-        with patch.object(LLMInterface, 'get_response', return_value=mock_llm_response), \
-             patch('roadnerd_server.SystemDiagnostics.get_system_info', return_value=mock_system_info), \
-             patch('roadnerd_server.SystemDiagnostics.check_connectivity', return_value=mock_connectivity), \
-             patch('roadnerd_server._load_template', return_value="{{ISSUE}} {{CATEGORY_HINT}} {{N}} {{SYSTEM}} {{RETRIEVAL}}") as mock_template:
+        mock_llm = MagicMock(spec=LLMInterface)
+        mock_llm.get_response.return_value = mock_llm_response
+        
+        with patch('modules.system_diagnostics.SystemDiagnostics.get_system_info', return_value=mock_system_info), \
+             patch('modules.system_diagnostics.SystemDiagnostics.check_connectivity', return_value=mock_connectivity), \
+             patch('modules.brainstorm_engine.TemplateLoader.load_template', return_value="{{ISSUE}} {{CATEGORY_HINT}} {{N}} {{SYSTEM}} {{RETRIEVAL}}") as mock_template:
             
-            BrainstormEngine.generate_ideas(
+            engine = BrainstormEngine(mock_llm)
+            engine.generate_ideas(
                 issue="Network down", 
                 n=3, 
                 category_hint="network", 
@@ -317,8 +352,8 @@ These are the most likely causes based on the symptoms described.'''
             mock_template.assert_called_once_with('brainstorm', category_hint='network')
             
             # Verify LLM was called with properly rendered template
-            LLMInterface.get_response.assert_called_once()
-            prompt = LLMInterface.get_response.call_args[0][0]
+            mock_llm.get_response.assert_called_once()
+            prompt = mock_llm.get_response.call_args[0][0]
             
             # Template should contain all context variables
             assert "Network down" in prompt  # ISSUE

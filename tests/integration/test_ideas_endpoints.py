@@ -23,11 +23,10 @@ def stub_llm_response_array():
     ])
 
 
-def test_brainstorm_parses_array(flask_client, monkeypatch):
-    import roadnerd_server as srv
-    monkeypatch.setattr(srv.LLMInterface, 'get_response', staticmethod(lambda *a, **k: stub_llm_response_array()))
+def test_brainstorm_parses_array(mock_llm_client):
+    client = mock_llm_client(stub_llm_response_array)
 
-    r = flask_client.post('/api/ideas/brainstorm', json={'issue': 'DNS failing', 'n': 5, 'creativity': 2})
+    r = client.post('/api/ideas/brainstorm', json={'issue': 'DNS failing', 'n': 5, 'creativity': 2})
     assert r.status_code == 200
     data = r.get_json()
     assert 'ideas' in data and isinstance(data['ideas'], list)
@@ -36,15 +35,14 @@ def test_brainstorm_parses_array(flask_client, monkeypatch):
     assert 'hypothesis' in first and 'category' in first and 'checks' in first
 
 
-def test_brainstorm_parses_fenced_json(flask_client, monkeypatch):
-    import roadnerd_server as srv
+def test_brainstorm_parses_fenced_json(mock_llm_client):
     fenced = """
 ```json
 [{"hypothesis":"WiFi radio blocked","category":"wifi","why":"rfkill shows blocked","checks":["rfkill list"],"fixes":["rfkill unblock all"],"risk":"low"}]
 ```
 """
-    monkeypatch.setattr(srv.LLMInterface, 'get_response', staticmethod(lambda *a, **k: fenced))
-    r = flask_client.post('/api/ideas/brainstorm', json={'issue': 'wifi down', 'n': 3, 'creativity': 3})
+    client = mock_llm_client(lambda: fenced)
+    r = client.post('/api/ideas/brainstorm', json={'issue': 'wifi down', 'n': 3, 'creativity': 3})
     assert r.status_code == 200
     ideas = r.get_json()['ideas']
     assert len(ideas) == 1

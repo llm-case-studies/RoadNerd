@@ -18,15 +18,35 @@ from pathlib import Path
 
 # Imports (do not auto-install; fail with guidance)
 try:
-    from flask import Flask, request, jsonify, render_template_string, send_file, make_response
+    from flask import Flask, request, jsonify, render_template_string, render_template, send_file, make_response
     from flask_cors import CORS
 except ImportError:
     print("Missing dependencies for RoadNerd server: flask, flask-cors")
     print("Activate your venv (RN_VENV) and run: pip install flask flask-cors")
     sys.exit(1)
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', template_folder='templates')
 CORS(app)  # Allow cross-origin requests
+
+# Static asset version (for cache busting)
+try:
+    app.config['ASSET_VER'] = os.getenv('RN_ASSET_VER') or datetime.now().strftime('%Y%m%d%H%M%S')
+except Exception:
+    app.config['ASSET_VER'] = '0'
+
+
+@app.after_request
+def _add_security_headers(resp):
+    """Add CSP and basic security headers for HTML pages."""
+    try:
+        csp = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'"
+        resp.headers.setdefault('Content-Security-Policy', csp)
+        resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        resp.headers.setdefault('X-Frame-Options', 'DENY')
+        resp.headers.setdefault('Referrer-Policy', 'no-referrer')
+    except Exception:
+        pass
+    return resp
 
 # Ensure local imports (classify.py, retrieval.py) resolve when running as a script
 try:
@@ -196,6 +216,14 @@ import uuid
 @app.route('/')
 def home():
     """Serve a simple web interface"""
+    # Presentation extracted: render template with static JS/CSS
+    # The inline HTML below is kept temporarily for reference and will be removed
+    # once Phase 2A extraction completes across all routes.
+    try:
+        return render_template('home.html', asset_ver=app.config.get('ASSET_VER', '0'))
+    except Exception:
+        # Fallback to legacy inline HTML if templates are not available
+        pass
     html = '''
     <!DOCTYPE html>
     <html>
@@ -634,6 +662,12 @@ def api_status():
 @app.route('/api-docs', methods=['GET'])
 def api_docs():
     """Lightweight API console for browser testing"""
+    # Presentation extracted: serve Jinja template with external JS/CSS (no inline scripts)
+    try:
+        return render_template('api_console.html', asset_ver=app.config.get('ASSET_VER', '0'))
+    except Exception:
+        # Fallback to legacy inline console if templates are not available
+        pass
     html = '''
     <!DOCTYPE html>
     <html>
@@ -1058,6 +1092,12 @@ def api_docs():
     </html>
     '''
     return render_template_string(html)
+
+
+@app.route('/bundle-ui', methods=['GET'])
+def bundle_ui():
+    """Separate Bundle Management UI (scaffold)."""
+    return render_template('bundle-ui.html', asset_ver=app.config.get('ASSET_VER', '0'))
 
 
 # =====================================================================
@@ -1633,25 +1673,37 @@ def api_bundle_scan_storage():
         result = subprocess.run(['df', '-h'], capture_output=True, text=True)
         df_output = result.stdout
         
-        # Get lsblk info for better device detection
-        lsblk_result = subprocess.run(['lsblk', '-o', 'NAME,SIZE,MOUNTPOINT,TYPE,REMOVABLE'], 
-                                     capture_output=True, text=True)
+        # Get lsblk info for better device detection (use default columns)
+        lsblk_result = subprocess.run(['lsblk'], capture_output=True, text=True)
         lsblk_output = lsblk_result.stdout
         
-        # Parse for removable drives
+        # Parse for external storage devices (USB, external drives)
         drives = []
         for line in lsblk_output.split('\n')[1:]:  # Skip header
             if line.strip():
                 parts = line.split()
-                if len(parts) >= 5 and parts[4] == '1':  # Removable
-                    mountpoint = parts[2] if len(parts) > 2 and parts[2] != '' else 'Not mounted'
-                    drives.append({
-                        'name': parts[0],
-                        'size': parts[1],
-                        'mountpoint': mountpoint,
-                        'type': parts[3],
-                        'removable': True
-                    })
+                if len(parts) >= 7:  # NAME MAJ:MIN RM SIZE RO TYPE MOUNTPOINTS
+                    name = parts[0]
+                    rm = parts[2]  # RM column (removable flag)
+                    size = parts[3]
+                    device_type = parts[5]
+                    mountpoint = parts[6] if len(parts) > 6 and parts[6] != '' else 'Not mounted'
+                    
+                    # Detect external storage: USB drives (sd*), removable devices, or mounted external paths
+                    is_external = (
+                        rm == '1' or  # Removable flag set
+                        name.startswith('sd') or  # SCSI disk (often USB)
+                        (mountpoint.startswith('/media/') or mountpoint.startswith('/mnt/'))  # External mount points
+                    )
+                    
+                    if is_external and device_type in ['disk', 'part'] and mountpoint != 'Not mounted':
+                        drives.append({
+                            'name': name,
+                            'size': size,
+                            'mountpoint': mountpoint,
+                            'type': device_type,
+                            'removable': rm == '1'
+                        })
         
         return jsonify({
             'drives': drives,

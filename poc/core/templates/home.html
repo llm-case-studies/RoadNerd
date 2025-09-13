@@ -1,0 +1,24 @@
+{% extends 'base.html' %}
+{% block content %}
+  <h1>🚀 RoadNerd Server Active</h1>
+  <section class="status">
+    <h2>System Status</h2>
+    <pre id="status">Loading...</pre>
+  </section>
+  <section class="status">
+    <h2>Available Endpoints</h2>
+    <div class="endpoint">POST /api/diagnose - Analyze system issue</div>
+    <div class="endpoint">POST /api/execute - Execute command</div>
+    <div class="endpoint">GET /api/status - System status</div>
+    <div class="endpoint">POST /api/llm - Query LLM directly</div>
+    <div class="endpoint">GET <a href="/api-docs">/api-docs</a> - API Console (browser tests)</div>
+    <div class="endpoint">GET <a href="/bundle-ui">/bundle-ui</a> - Bundle Management (scaffold)</div>
+  </section>
+  <section class="status">
+    <h2>Connection Info</h2>
+    <div id="conn">Detecting local addresses...</div>
+    <p>Recommended: direct Ethernet between Patient Box and this server. Typical: <code>10.55.0.1:8080</code>.</p>
+  </section>
+  <script src="{{ url_for('static', filename='js/status.js', v=asset_ver) }}" defer></script>
+{% endblock %}
+
