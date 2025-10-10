@@ -1,10 +1,210 @@
-:root{--bg:#0b1220;--fg:#e0e6f0;--panel:#111827;--panel-border:#1f2937;--accent:#2563eb}
-*{box-sizing:border-box} body{margin:0;padding:20px;background:var(--bg);color:var(--fg);font-family:system-ui,ui-sans-serif,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
-.container{max-width:960px;margin:0 auto}
-h1,h2{margin:0 0 10px}
-section.status{background:var(--panel);border:1px solid var(--panel-border);border-radius:8px;padding:16px;margin:16px 0}
-.endpoint{margin:6px 0;padding:6px;background:#0b1220;border:1px solid var(--panel-border);border-radius:6px}
-a{color:#7cf}
-.progress{background:#e5e7eb;border-radius:8px;overflow:hidden;height:16px}
-.progress .bar{background:#10b981;height:100%;transition:width .3s}
+:root {
+  --bg: #0b1220;
+  --fg: #e0e6f0;
+  --panel: #111827;
+  --panel-border: #1f2937;
+  --accent: #2563eb;
+  --input-bg: #1f2937;
+  --button-bg: #374151;
+  --button-hover: #4b5563;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --error: #ef4444;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 20px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, ui-sans-serif, "Segoe UI", Roboto, Ubuntu, "Helvetica Neue", Arial;
+  line-height: 1.5;
+}
+
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+/* Headers */
+h1, h2, h3 {
+  margin: 0 0 16px 0;
+  color: var(--fg);
+}
+
+h1 {
+  font-size: 1.875rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+  margin-top: 24px;
+}
+
+h3 {
+  font-size: 1.25rem;
+  font-weight: 500;
+}
+
+/* Links */
+a {
+  color: #7cf;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Sections and panels */
+section.status {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 16px 0;
+}
+
+.endpoint {
+  margin: 12px 0;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+}
+
+/* Form elements */
+input[type="text"], input[type="password"], textarea, select {
+  background: var(--input-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  min-width: 200px;
+}
+
+input[type="text"]:focus, input[type="password"]:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 80px;
+  width: 100%;
+  max-width: 400px;
+}
+
+/* Checkboxes */
+input[type="checkbox"] {
+  margin-right: 8px;
+}
+
+label {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 16px;
+  margin-bottom: 8px;
+  color: var(--fg);
+  font-size: 14px;
+}
+
+/* Buttons */
+button, input[type="button"], input[type="submit"] {
+  background: var(--button-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 8px 16px;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  margin: 4px 8px 4px 0;
+  min-width: 80px;
+}
+
+button:hover, input[type="button"]:hover, input[type="submit"]:hover {
+  background: var(--button-hover);
+}
+
+button:active, input[type="button"]:active, input[type="submit"]:active {
+  transform: translateY(1px);
+}
+
+/* Form layout */
+.form-group {
+  margin: 16px 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0;
+}
+
+/* Progress bars */
+.progress {
+  background: #374151;
+  border-radius: 8px;
+  overflow: hidden;
+  height: 16px;
+  margin: 8px 0;
+}
+
+.progress .bar {
+  background: var(--success);
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+/* Code and pre elements */
+pre, code {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  background: var(--input-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 12px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+code {
+  padding: 2px 4px;
+  display: inline;
+}
+
+/* Responsive layout */
+@media (max-width: 768px) {
+  body {
+    padding: 16px;
+  }
+  
+  .form-group, .form-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  input[type="text"], input[type="password"], textarea, select {
+    min-width: auto;
+    width: 100%;
+  }
+}
 
