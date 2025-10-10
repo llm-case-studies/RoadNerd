@@ -147,13 +147,37 @@ class BrainstormEngine:
     @staticmethod
     def _parse_ideas_response(response: str, issue: str) -> List[Idea]:
         """Parse LLM response into structured Idea objects (tolerant of arrays, fences)."""
+        def normalize_commands(commands):
+            """Convert commands to simple string list, handling both formats."""
+            if not commands:
+                return []
+            
+            normalized = []
+            for cmd in commands:
+                if isinstance(cmd, str):
+                    # Already a simple string
+                    normalized.append(cmd)
+                elif isinstance(cmd, dict):
+                    # Structured format with description/command
+                    if 'command' in cmd:
+                        normalized.append(cmd['command'])
+                    elif 'description' in cmd:
+                        normalized.append(cmd['description'])
+                    else:
+                        # Fallback: convert dict to string
+                        normalized.append(str(cmd))
+                else:
+                    # Fallback: convert to string
+                    normalized.append(str(cmd))
+            return normalized
+        
         def to_idea(obj: Dict) -> Idea:
             return Idea(
                 hypothesis=obj.get('hypothesis', 'Unknown hypothesis'),
                 category=obj.get('category', 'general'),
                 why=obj.get('why', 'No reasoning provided'),
-                checks=obj.get('checks', []),
-                fixes=obj.get('fixes', []),
+                checks=normalize_commands(obj.get('checks', [])),
+                fixes=normalize_commands(obj.get('fixes', [])),
                 risk=obj.get('risk', 'medium')
             )
 

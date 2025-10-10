@@ -794,8 +794,18 @@ def api_docs():
             <input type="checkbox" id="includeDeps" checked> 📦 Include Dependencies (Offline Mode) - 62MB
           </label>
           <label style="display: block; margin: 5px 0;">
-            <input type="checkbox" id="includeModels"> 🧠 Include LLM Models (~5GB)
+            <input type="checkbox" id="includeModels" onchange="toggleModelSelection()"> 🧠 Include LLM Models
           </label>
+          <div id="modelSelection" style="display: none; margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+            <h5>Select Models to Include:</h5>
+            <button onclick="loadAvailableModels()" style="background: #17a2b8; color: white; padding: 6px 12px; margin: 5px 0;">🔄 Load Available Models</button>
+            <div id="modelList" style="margin: 10px 0;"></div>
+            <div style="margin: 5px 0;">
+              <button onclick="selectAllModels()" style="background: #6c757d; color: white; padding: 4px 8px; margin: 2px;">All</button>
+              <button onclick="selectCachedModels()" style="background: #6c757d; color: white; padding: 4px 8px; margin: 2px;">Cached Only</button>
+              <button onclick="clearModelSelection()" style="background: #6c757d; color: white; padding: 4px 8px; margin: 2px;">None</button>
+            </div>
+          </div>
         </div>
         
         <div style="margin: 15px 0;">
@@ -1028,13 +1038,103 @@ def api_docs():
           document.getElementById('targetPath').value = path;
         }
         
+        // Global variable to store available models
+        let availableModels = [];
+        
+        function toggleModelSelection() {
+          const includeModels = document.getElementById('includeModels').checked;
+          const modelSelection = document.getElementById('modelSelection');
+          modelSelection.style.display = includeModels ? 'block' : 'none';
+          
+          if (includeModels && availableModels.length === 0) {
+            loadAvailableModels();
+          }
+        }
+        
+        async function loadAvailableModels() {
+          try {
+            document.getElementById('modelList').innerHTML = '🔄 Loading models...';
+            const r = await fetch('/api/bundle/models/list', {method: 'GET', headers: headers()});
+            const data = await r.json();
+            
+            if (data.models) {
+              availableModels = data.models;
+              renderModelList(data.models);
+            } else {
+              document.getElementById('modelList').innerHTML = '❌ Error: ' + (data.error || 'Failed to load models');
+            }
+          } catch (e) {
+            document.getElementById('modelList').innerHTML = '❌ Error loading models: ' + e.message;
+          }
+        }
+        
+        function renderModelList(models) {
+          const modelList = document.getElementById('modelList');
+          if (models.length === 0) {
+            modelList.innerHTML = '<p>No models found. Make sure Ollama is running.</p>';
+            return;
+          }
+          
+          let html = '<div style="max-height: 200px; overflow-y: auto; border: 1px solid #eee; padding: 5px;">';
+          models.forEach((model, index) => {
+            const cachedBadge = model.cached ? ' <span style="background: #28a745; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px;">CACHED</span>' : ' <span style="background: #ffc107; color: black; padding: 2px 6px; border-radius: 3px; font-size: 11px;">DOWNLOAD</span>';
+            html += `
+              <label style="display: block; margin: 4px 0; padding: 4px; border: 1px solid #ddd; border-radius: 3px;">
+                <input type="checkbox" id="model_${index}" value="${model.name}"> 
+                <strong>${model.name}</strong> (${model.size})${cachedBadge}
+              </label>
+            `;
+          });
+          html += '</div>';
+          html += `<p style="font-size: 12px; color: #666; margin: 5px 0;">Total: ${models.length} models, ${models.filter(m => m.cached).length} cached</p>`;
+          modelList.innerHTML = html;
+        }
+        
+        function selectAllModels() {
+          availableModels.forEach((_, index) => {
+            const checkbox = document.getElementById(`model_${index}`);
+            if (checkbox) checkbox.checked = true;
+          });
+        }
+        
+        function selectCachedModels() {
+          availableModels.forEach((model, index) => {
+            const checkbox = document.getElementById(`model_${index}`);
+            if (checkbox) checkbox.checked = model.cached;
+          });
+        }
+        
+        function clearModelSelection() {
+          availableModels.forEach((_, index) => {
+            const checkbox = document.getElementById(`model_${index}`);
+            if (checkbox) checkbox.checked = false;
+          });
+        }
+        
+        function getSelectedModels() {
+          const selected = [];
+          availableModels.forEach((model, index) => {
+            const checkbox = document.getElementById(`model_${index}`);
+            if (checkbox && checkbox.checked) {
+              selected.push(model.name);
+            }
+          });
+          return selected;
+        }
+
         async function createBundle() {
           const targetPath = document.getElementById('targetPath').value;
           const includeDeps = document.getElementById('includeDeps').checked;
           const includeModels = document.getElementById('includeModels').checked;
+          const selectedModels = includeModels ? getSelectedModels() : [];
           
           if (!targetPath) {
             alert('Please specify a target path for the bundle');
+            return;
+          }
+          
+          if (includeModels && selectedModels.length === 0) {
+            alert('Please select at least one model to include in the bundle');
             return;
           }
           
@@ -1042,14 +1142,17 @@ def api_docs():
           document.getElementById('bundleProgress').style.display = 'block';
           
           try {
+            const requestBody = {
+              target_path: targetPath,
+              include_deps: includeDeps,
+              include_models: includeModels && selectedModels.length === 0, // Old behavior for "all cached"
+              selected_models: selectedModels
+            };
+            
             const r = await fetch('/api/bundle/create', {
               method: 'POST',
               headers: headers(),
-              body: JSON.stringify({
-                target_path: targetPath,
-                include_deps: includeDeps,
-                include_models: includeModels
-              })
+              body: JSON.stringify(requestBody)
             });
             const data = await r.json();
             
@@ -1665,6 +1768,49 @@ def start_llm_backend():
 
 
 # Bundle management endpoints
+@app.route('/api/bundle/models/list', methods=['GET'])
+def api_bundle_list_models():
+    """List available Ollama models for bundling"""
+    try:
+        import subprocess
+        
+        # Get list of available models
+        result = subprocess.run(['ollama', 'list'], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            return jsonify({'error': 'Failed to get model list. Is Ollama running?'}), 500
+        
+        lines = result.stdout.strip().split('\n')[1:]  # Skip header
+        models = []
+        
+        for line in lines:
+            if line.strip():
+                parts = line.split()
+                if len(parts) >= 4:
+                    name = parts[0]
+                    model_id = parts[1]
+                    size = parts[2]
+                    modified = ' '.join(parts[3:])
+                    
+                    # Check if model is cached
+                    cached = os.path.exists(f"{os.path.expanduser('~')}/.ollama/models/manifests/registry.ollama.ai/library/{name.split(':')[0]}")
+                    
+                    models.append({
+                        'name': name,
+                        'id': model_id,
+                        'size': size,
+                        'modified': modified,
+                        'cached': cached
+                    })
+        
+        return jsonify({
+            'models': models,
+            'total': len(models),
+            'cached_count': sum(1 for m in models if m['cached'])
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Error listing models: {str(e)}'}), 500
+
 @app.route('/api/bundle/storage/scan', methods=['GET'])
 def api_bundle_scan_storage():
     """Scan for available USB drives and storage devices"""
@@ -1716,11 +1862,12 @@ def api_bundle_scan_storage():
 
 @app.route('/api/bundle/create', methods=['POST'])
 def api_bundle_create():
-    """Create a bundle on specified storage device"""
+    """Create a bundle on specified storage device with optional model selection"""
     data = request.get_json() or {}
     target_path = data.get('target_path')
     include_models = data.get('include_models', False)
     include_deps = data.get('include_deps', True)  # Default to offline mode
+    selected_models = data.get('selected_models', [])  # List of model names to preload
     
     if not target_path:
         return jsonify({'error': 'target_path required'}), 400
@@ -1734,8 +1881,15 @@ def api_bundle_create():
         script_path = os.path.join(os.path.dirname(__file__), '..', '..', 'tools', 'make_portable_bundle.sh')
         cmd = ['bash', script_path]
         
-        if include_models:
+        # Handle model selection
+        if selected_models:
+            # Use preload-models for specific model selection
+            models_str = ','.join(selected_models)
+            cmd.extend(['--preload-models', models_str])
+        elif include_models:
+            # Use include-models for all cached models
             cmd.append('--include-models')
+            
         if include_deps:
             cmd.append('--include-deps')
         cmd.append(target_path)

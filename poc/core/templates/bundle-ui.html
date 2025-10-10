@@ -10,11 +10,29 @@
   </div>
   <div id="storageList" class="status" style="margin-top: 10px;"></div>
   <div style="margin: 15px 0;">
-    <label>Target Path:</label>
-    <input id="targetPath" placeholder="e.g., /media/usb/roadnerd-bundle" style="width: 360px;"/>
-    <label style="margin-left: 10px;"><input type="checkbox" id="includeDeps" checked/> Include Dependencies</label>
-    <label style="margin-left: 10px;"><input type="checkbox" id="includeModels"/> Include Models</label>
-    <button id="createBtn" style="margin-left: 10px;">🚀 Create Bundle</button>
+    <h4>Bundle Options:</h4>
+    <label style="display: block; margin: 5px 0;">
+      <input type="checkbox" id="includeDeps" checked> 📦 Include Dependencies (Offline Mode) - 62MB
+    </label>
+    <label style="display: block; margin: 5px 0;">
+      <input type="checkbox" id="includeModels" onchange="toggleModelSelection()"> 🧠 Include LLM Models
+    </label>
+    <div id="modelSelection" style="display: none; margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+      <h5>Select Models to Include:</h5>
+      <button onclick="loadAvailableModels()" style="background: #17a2b8; color: white; padding: 6px 12px; margin: 5px 0;">🔄 Load Available Models</button>
+      <div id="modelList" style="margin: 10px 0;"></div>
+      <div style="margin: 5px 0;">
+        <button onclick="selectAllModels()" style="background: #6c757d; color: white; padding: 4px 8px; margin: 2px;">All</button>
+        <button onclick="selectCachedModels()" style="background: #6c757d; color: white; padding: 4px 8px; margin: 2px;">Cached Only</button>
+        <button onclick="clearModelSelection()" style="background: #6c757d; color: white; padding: 4px 8px; margin: 2px;">None</button>
+      </div>
+    </div>
+  </div>
+  
+  <div style="margin: 15px 0;">
+    <label>Target Path:</label><br>
+    <input id="targetPath" placeholder="e.g., /media/usb/roadnerd-bundle" style="width: 400px; margin: 5px 0;"/>
+    <button id="createBtn" style="background: #ff6b35; color: white; padding: 8px 16px;">🚀 Create Bundle</button>
   </div>
   <div id="bundleProgress" style="display:none;">
     <h3>Progress</h3>
